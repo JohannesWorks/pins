@@ -218,21 +218,81 @@ namespace NINA.INDI.Devices {
         public double SiteElevation {
             get => GetNumberPropertyValue("GEOGRAPHIC_COORD", "ELEV") ?? double.NaN;
             set {
+                // Prefer SetSiteLocation() to push LAT+LONG+ELEV atomically.
+                // Writing ELEV alone is fine, it does not affect the LST computation.
                 SetNumberValue("GEOGRAPHIC_COORD", "ELEV", value);
             }
         }
         public double SiteLatitude {
             get => GetNumberPropertyValue("GEOGRAPHIC_COORD", "LAT") ?? double.NaN;
             set {
+                // NOTE: prefer SetSiteLocation() so LAT and LONG are applied in ONE vector.
+                // Writing LAT alone re-sends the cached/stale LONG (see SetSiteLocation remark).
                 SetNumberValue("GEOGRAPHIC_COORD", "LAT", value);
             }
         }
         public double SiteLongitude {
-            get => GetNumberPropertyValue("GEOGRAPHIC_COORD", "LONG") ?? double.NaN;
+            // INDI stores LONG as 0..360 measured EAST. NINA works in -180..180 (East positive),
+            // so convert on read/write to keep the rest of the code in the NINA convention.
+            get {
+                var l = GetNumberPropertyValue("GEOGRAPHIC_COORD", "LONG") ?? double.NaN;
+                return l > 180.0 ? l - 360.0 : l;
+            }
             set {
-                SetNumberValue("GEOGRAPHIC_COORD", "LONG", value);
+                // NOTE: prefer SetSiteLocation() so LAT and LONG are applied in ONE vector.
+                var lon = value < 0 ? value + 360.0 : value;
+                SetNumberValue("GEOGRAPHIC_COORD", "LONG", lon);
             }
         }
+
+        /// <summary>
+        /// Pushes the full observing site to the mount in ONE GEOGRAPHIC_COORD vector
+        /// (LAT + LONG + ELEV together).
+        ///
+        /// Same reason as the TIME_UTC handling: the INDI driver (e.g. indi_lx200am5 for the
+        /// ZWO AM5) applies the whole GEOGRAPHIC_COORD vector atomically and pushes :St# / :Sg#
+        /// to the controller. If LAT is written on its own, the cached/stale LONG (0 after a
+        /// fresh power-on) is re-sent, the mount computes a wrong Local Sidereal Time and the
+        /// firmware rejects every GOTO ("below horizon" / "outside limits").
+        ///
+        /// The act of writing GEOGRAPHIC_COORD is also what "arms" the AM5 for slewing — this
+        /// mirrors what Ekos/KStars does on connect ("Observer location updated").
+        ///
+        /// INDI convention: LONG is 0..360 measured EAST. NINA passes longitude as -180..180
+        /// (East positive), so negative (western) longitudes are converted here.
+        /// </summary>
+        public void SetSiteLocation(double latitude, double longitude, double elevation) {
+            try {
+                var lon = longitude < 0 ? longitude + 360.0 : longitude;
+                SetNumberValues("GEOGRAPHIC_COORD", ("LAT", latitude), ("LONG", lon), ("ELEV", elevation));
+                Logger.Debug($"Set mount site: Lat={latitude:0.####} Long(0..360E)={lon:0.####} Elev={elevation}");
+            } catch (Exception ex) {
+                Logger.Error($"Could not set GEOGRAPHIC_COORD: {ex.Message}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Re-asserts the location currently held in GEOGRAPHIC_COORD as a single atomic vector.
+        /// Forces the driver to run :St#/:Sg# and recompute the LST before a GOTO, even when the
+        /// values are unchanged. Used as a safety net right before slewing.
+        /// </summary>
+        private void ReassertSiteLocation() {
+            var lat = GetNumberPropertyValue("GEOGRAPHIC_COORD", "LAT");
+            var lon = GetNumberPropertyValue("GEOGRAPHIC_COORD", "LONG");
+            var elv = GetNumberPropertyValue("GEOGRAPHIC_COORD", "ELEV") ?? 0;
+            if (lat.HasValue && lon.HasValue) {
+                try {
+                    SetNumberValues("GEOGRAPHIC_COORD", ("LAT", lat.Value), ("LONG", lon.Value), ("ELEV", elv));
+                    Logger.Debug($"Re-asserted mount site before slew: Lat={lat.Value:0.####} Long={lon.Value:0.####}");
+                } catch (Exception ex) {
+                    Logger.Warning($"Could not re-assert GEOGRAPHIC_COORD before slew: {ex.Message}");
+                }
+            } else {
+                Logger.Warning("GEOGRAPHIC_COORD not available - cannot re-assert site location before slew");
+            }
+        }
+
         public int SlewSettleTime { get; }
         public bool Slewing {
             get {
@@ -690,6 +750,12 @@ namespace NINA.INDI.Devices {
 
                 atHome = false;
 
+                // The AM5 (indi_lx200am5) needs an applied site location before it accepts a
+                // GOTO. Re-assert GEOGRAPHIC_COORD as ONE vector so the driver runs :St#/:Sg#
+                // and recomputes the Local Sidereal Time before the target arrives. Mirrors what
+                // Ekos/KStars does on connect ("Observer location updated").
+                ReassertSiteLocation();
+
                 // Enable slewing mode
                 SetSwitchValue("ON_COORD_SET", "SLEW", true);
 
@@ -737,6 +803,10 @@ namespace NINA.INDI.Devices {
                 }
 
                 atHome = false;
+
+                // Make sure the mount has its site location applied before slewing (see
+                // SlewToCoordinates / SetSiteLocation for the rationale).
+                ReassertSiteLocation();
 
                 // Enable slewing mode
                 SetSwitchValue("ON_COORD_SET", "SLEW", true);
@@ -790,6 +860,10 @@ namespace NINA.INDI.Devices {
                     Logger.Error("Cannot slew: Mount is parked");
                     throw new InvalidOperationException("Mount is parked");
                 }
+
+                // Make sure the mount has its site location applied before syncing (see
+                // SlewToCoordinates / SetSiteLocation for the rationale).
+                ReassertSiteLocation();
 
                 // Enable sync mode
                 SetSwitchValue("ON_COORD_SET", "SYNC", true);
