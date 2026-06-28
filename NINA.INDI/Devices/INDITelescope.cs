@@ -22,7 +22,6 @@ using NINA.INDI.Protocol;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -39,57 +38,20 @@ namespace NINA.INDI.Devices {
         /// </summary>
         public static double ActualMaxSlewRateDps { get; set; } = 4.0;
 
-        // Sidereal tracking rate in °/s (≈ 15"/s)
-        private const double SIDEREAL_RATE_DPS = 15.0 / 3600.0;
-
         /// <summary>
-        /// Tries to parse an INDI switch Label or Name to a real °/s value.
-        /// Handles: "Max"/"Maximum" → ActualMaxSlewRateDps, "Half"/"Half-Max" → max/2,
-        /// "NNx" / "NN×" sidereal multiples (e.g. "48x" → 48 * 0.00417°/s).
-        /// </summary>
-        private double? TryParseSwitchRateDps(INDISwitch sw) {
-            var text = string.IsNullOrWhiteSpace(sw.Label) ? sw.Name : sw.Label;
-            var upper = text.ToUpperInvariant();
-
-            if (upper.Contains("MAX") && !upper.Contains("HALF"))
-                return ActualMaxSlewRateDps;
-
-            if (upper.Contains("HALF"))
-                return ActualMaxSlewRateDps / 2.0;
-
-            var m = Regex.Match(text, @"([\d.]+)\s*[xX×]");
-            if (m.Success && double.TryParse(m.Groups[1].Value,
-                    System.Globalization.NumberStyles.Float,
-                    System.Globalization.CultureInfo.InvariantCulture, out var mult))
-                return mult * SIDEREAL_RATE_DPS;
-
-            return null;
-        }
-
-        /// <summary>
-        /// Returns the switch index that best matches absRate (in °/s).
-        /// Uses °/s nearest-neighbour matching only when *every* switch carries a parsable
-        /// rate (e.g. OnStep's "48x"/"16x" labels). Named-only rates like Guide/Centering/
-        /// Find/Max parse just "Max", which would otherwise always win — so when any switch
-        /// is unparsable we fall back to proportional index mapping over the ordered list.
+        /// Maps absRate (a normalised 0..ActualMaxSlewRateDps value) proportionally onto the
+        /// ordered TELESCOPE_SLEW_RATE switch list: stop i selects switch index i.
+        ///
+        /// We deliberately do NOT match against per-switch °/s parsed from labels. That only
+        /// works when every label is parsable (e.g. OnStep "48x"/"16x") and even then the real
+        /// rates are non-linear and far smaller than ActualMaxSlewRateDps, so a normalised rate
+        /// would clamp every higher stop onto the fastest switch. Proportional index mapping
+        /// gives consistent, evenly-spaced steps for both named (Guide/Centering/Find/Max) and
+        /// multiplier-labelled drivers.
         /// </summary>
         private int FindBestSwitchIndex(double absRate, IList<INDISwitch> switches) {
             int maxIndex = switches.Count - 1;
-
-            int bestIdx = -1;
-            double bestDiff = double.MaxValue;
-            bool allParsable = true;
-            for (int i = 0; i <= maxIndex; i++) {
-                var rate = TryParseSwitchRateDps(switches[i]);
-                if (rate == null) { allParsable = false; continue; }
-                var diff = Math.Abs(rate.Value - absRate);
-                if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
-            }
-
-            if (allParsable && bestIdx >= 0) return bestIdx;
-
-            // Not all switches expose a real °/s value (e.g. Guide/Centering/Find/Max) —
-            // map proportionally across the ordered switch list instead.
+            if (maxIndex <= 0) return 0;
             return Math.Max(0, Math.Min((int)Math.Round(absRate / ActualMaxSlewRateDps * maxIndex), maxIndex));
         }
 
