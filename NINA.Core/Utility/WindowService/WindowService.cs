@@ -20,6 +20,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Security;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -210,6 +211,11 @@ namespace NINA.Core.Utility.WindowService {
                             closeCommand.Execute(result);
                         }
                     } catch { }
+                    // Mirrors the real WPF path's Window.Closed handler (GenerateWindow below): callers that
+                    // subscribe to OnClosed to dispose/cancel a dialog VM when dismissed without a recognized
+                    // button (e.g. a headless dialog's fallback Cancel, or the DialogService window being
+                    // superseded) must still be notified in headless mode, or they hang waiting forever.
+                    try { this.OnClosed?.Invoke(this, EventArgs.Empty); } catch { }
                 };
 
                 var dialog = new DialogService.DialogInfo {
@@ -217,7 +223,10 @@ namespace NINA.Core.Utility.WindowService {
                     Message = ExtractMessage(content),
                     ContentType = contentType,
                     DataContext = content,
-                    ResultCallback = composedCallback
+                    ResultCallback = composedCallback,
+                    // See ExtractCommandButtons for what this event signals; DialogService.ClickButton reads this
+                    // to decide whether a button click should force-close the dialog.
+                    SelfClosing = content?.GetType().GetEvent("RequestClose") != null
                 };
 
                 // Extract content properties
@@ -356,6 +365,17 @@ namespace NINA.Core.Utility.WindowService {
                     availableCommandNames.Add("Cancel");
                 }
 
+                // Touch-N-Stars' DialogModal.handleClose (the modal's X) auto-clicks the sole visible button when
+                // there is exactly one, otherwise clicks a button named "PART_CloseButton" — a WPF naming
+                // convention that has no real button behind it here, so without this it silently does nothing
+                // whenever a dialog has zero or two-or-more visible buttons (any self-closing VM with more than
+                // one command, e.g. Apply+Cancel). Register it as a working hidden button that closes the window
+                // directly — matching real WPF's own default X-button behavior, which closes the window rather
+                // than invoking any particular VM command — instead of changing the frontend's per-dialog-type
+                // guesswork. Never added to availableCommandNames, so it broadcasts no visible extra button.
+                DialogService.AddButton(dialogId, "PART_CloseButton", "PART_CloseButton", isDefault: false, isCancel: true,
+                    onClick: () => { _ = Close(); });
+
                 // Broadcast via SignalR immediately
                 _ = Task.Run(async () => {
                     try {
@@ -409,24 +429,58 @@ namespace NINA.Core.Utility.WindowService {
 
         /// <summary>
         /// Scans well-known ICommand properties on the content object and returns button descriptors.
-        /// Only a whitelisted set of command names is considered to avoid adding unintended buttons.
         /// </summary>
+        // Property names carrying known display text / styling, used by dialog VMs whose button row is
+        // otherwise handled by a bespoke frontend component (MeridianFlip, ManualRotator, PlateSolving, ...).
+        // Kept as an exact whitelist so those dialogs' button sets don't change.
+        private static readonly (string PropName, string DisplayName, bool IsDefault, bool IsCancel)[] KnownCommands = new[] {
+            ("ContinueCommand",  "Continue", true,  false),
+            ("OKCommand",        "OK",        true,  false),
+            ("YesCommand",       "Yes",       true,  false),
+            ("ConfirmCommand",   "Confirm",   true,  false),
+            ("CancelCommand",    "Cancel",    false, true),
+            ("NoCommand",        "No",        false, false),
+            ("AbortCommand",     "Abort",     false, true),
+        };
+
         private static List<(string Name, ICommand Command, bool IsDefault, bool IsCancel)> ExtractCommandButtons(object content) {
             var result = new List<(string, ICommand, bool, bool)>();
             if (content == null) return result;
 
-            // Map property name → (displayName, isDefault, isCancel)
-            var knownCommands = new (string PropName, string DisplayName, bool IsDefault, bool IsCancel)[] {
-                ("ContinueCommand",  "Continue", true,  false),
-                ("OKCommand",        "OK",        true,  false),
-                ("YesCommand",       "Yes",       true,  false),
-                ("ConfirmCommand",   "Confirm",   true,  false),
-                ("CancelCommand",    "Cancel",    false, true),
-                ("NoCommand",        "No",        false, false),
-                ("AbortCommand",     "Abort",     false, true),
-            };
+            // A public "RequestClose" event signals a VM actually designed as a headless-safe modal choice (the
+            // pattern ReplaySettingsPromptVM, ImportStarDetectionPreviewVM, and FrameReviewVMBase use; see
+            // ReplaySettingsPrompt.cs in the HocusFocus plugin). Only those VMs get every public ICommand property
+            // surfaced as a button — every one of them is an intentional, terminal dialog choice (must eventually
+            // raise RequestClose, or the dialog can never close via a button). Known names still get their
+            // preferred display text/styling instead of a humanized property name.
+            //
+            // VMs WITHOUT a RequestClose event never take this path — only the known-name allowlist below applies
+            // to them — because a VM that merely happens to expose unrelated ICommand properties for other UI
+            // purposes (e.g. TPAPAVM's DragMoveCommand / LeftMouseButtonDownCommand, used for mouse-drag gestures
+            // on the polar-alignment chart) would otherwise have those turned into dialog buttons that do the
+            // wrong thing when clicked.
+            if (content.GetType().GetEvent("RequestClose") != null) {
+                var knownByProp = KnownCommands.ToDictionary(k => k.PropName);
+                foreach (var prop in content.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)) {
+                    if (!typeof(ICommand).IsAssignableFrom(prop.PropertyType)) continue;
+                    try {
+                        if (prop.GetValue(content) is ICommand cmd) {
+                            if (knownByProp.TryGetValue(prop.Name, out var known)) {
+                                result.Add((known.DisplayName, cmd, known.IsDefault, known.IsCancel));
+                            } else {
+                                var displayName = HumanizeCommandPropertyName(prop.Name);
+                                var lower = displayName.ToLowerInvariant();
+                                bool isCancel = lower.Contains("cancel") || lower.Contains("close") || lower.Contains("abort");
+                                bool isDefault = !isCancel && (lower.Contains("ok") || lower.Contains("yes") || lower.Contains("confirm") || lower.Contains("continue"));
+                                result.Add((displayName, cmd, isDefault, isCancel));
+                            }
+                        }
+                    } catch { }
+                }
+                return result;
+            }
 
-            foreach (var entry in knownCommands) {
+            foreach (var entry in KnownCommands) {
                 var prop = content.GetType().GetProperty(entry.PropName);
                 if (prop != null && typeof(ICommand).IsAssignableFrom(prop.PropertyType)) {
                     try {
@@ -436,7 +490,17 @@ namespace NINA.Core.Utility.WindowService {
                     } catch { }
                 }
             }
+
             return result;
+        }
+
+        /// <summary>Turns "UseCaptureInMemoryCommand" into "Use Capture In Memory".</summary>
+        private static string HumanizeCommandPropertyName(string propName) {
+            var name = propName.EndsWith("Command", StringComparison.Ordinal)
+                ? propName.Substring(0, propName.Length - "Command".Length)
+                : propName;
+            if (string.IsNullOrEmpty(name)) return propName;
+            return Regex.Replace(name, "(?<!^)([A-Z])", " $1");
         }
 
         private string ExtractMessage(object obj) {

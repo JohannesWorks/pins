@@ -4,6 +4,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.1.52 - 2026-07-22
+### Fixed
+- HocusFocus's "Replay Settings" prompt (shown when re-running a saved AutoFocus analysis from Touch-N-Stars) would open and hang forever: the headless dialog bridge only recognized OK/Cancel/Yes/No-style command names, so the prompt's actual choices never got wired to buttons, and dismissing its dead fallback button didn't notify the waiting backend either. Dialog view models that expose a `RequestClose` event (the pattern used by HocusFocus's headless-safe dialogs) now get all of their commands surfaced as buttons, and closing a headless dialog now raises `OnClosed` like a real window does
+- Other headless dialogs sharing the same bridge as the Replay Settings fix above were still broken in related ways: the star-detection import dialog only ever showed "Cancel" (its "Apply" command was silently dropped whenever a recognized command name like Cancel was also present), and the HocusFocus frame-review dialog closed itself the moment you clicked Prev/Next/Fit to page through frames instead of just navigating. Both are fixed, and the modal's X/dismiss button now also works for dialogs with more than one button (it previously only worked when a dialog had exactly one)
+
+## 1.1.51 - 2026-07-20
+### Fixed
+- INDI: Connection can now be canceled
+- ToupTek-alike filter wheels: filter changes no longer report ready before the wheel has physically finished moving (some firmware reports a matching position readback prematurely); the position setter now waits for the readback to stably confirm the commanded position
+### Changed
+- Updated NINA to 3.3.0.1049-nightly
+
+## 1.1.50 - 2026-07-14
+### Fixed
+- Fixed an issue with Alpaca cameras
+
+## 1.1.49 - 2026-07-13
+### Fixed
+- Fixed issue where GuideGraph config changes were ignored
+
+## 1.1.48 - 2026-07-10
+### Fixed
+- System.Windows.Compat: `Blob.Area` (Accord.Imaging shim) now reports actual pixel count instead of contour point count, matching Accord semantics
+- `Application.Current.Shutdown()` was a silent no-op; the host's shutdown lifetime is now wired up so it actually terminates the process (fixes plugin-update restart leaving the old instance running, and `--exitAfterSequence` never exiting)
+- System.Windows.Compat: `CommandManager.RequerySuggested` now holds subscribers weakly, matching WPF, instead of pinning every `RelayCommand.CanExecuteChanged` subscriber's target for the process lifetime
+- System.Windows.Compat: `Bitmap.LockBits` now throws instead of silently ignoring a requested sub-rectangle or pixel-format conversion it can't honor (previously handed back the full buffer in the Mat's own layout regardless of what was requested); the format check compares against the format the bitmap was created with, so `Format32bppPArgb`/`Format32bppRgb`/`Format16bppRgb565` bitmaps (which share a Mat type with other formats) can still be locked with their own format
+- Loading a non-grayscale image file (color JPEG/PNG/GIF/TIFF) via the image loader no longer fails: `FormatConvertedBitmap` now implements all Gray8/Gray16/Bgr24/Bgra32/Rgb48 conversion pairs instead of silently handing back an unconverted clone that lied about its format for unhandled combinations
+- Fixed `WeakEventManager` silently never attaching subscriptions to plain `event EventHandler`/`PropertyChangedEventHandler` sources (only worked for the rarer `event EventHandler<T>` shape) - this was breaking live propagation of target coordinate/location/profile changes through the sequencer (e.g. editing a target's coordinates after adding it to a container no longer updated dependent instructions). Also fixed cross-source hash-collision corruption and unbounded growth from repeated container cloning by keying subscriptions on source identity and self-pruning collected entries; subscriptions whose event args type derives from the manager's `TEventArgs` (e.g. `MouseButtonEventArgs` through `WeakEventManager<T, MouseEventArgs>`) now bind via relaxed delegate binding instead of failing, and static-method handlers can now be removed again
+- System.Windows.Compat: `BitmapSource.CopyPixels` now copies row-by-row when the underlying Mat isn't continuous (e.g. an un-cloned ROI view) instead of a single flat copy that assumed no padding between rows
+- System.Windows.Compat: `BitmapImage(Uri)` and `EndInit()` now actually load the file via `UriSource` instead of silently leaving the image empty
+- System.Windows.Compat: `JpegBitmapDecoder(Stream)` now loops until the buffer is fully read instead of trusting a single `Read` call, which could truncate the image on network/chunked streams
+- HocusFocus's surface-plot Z-axis label and per-star elongation-ellipse annotations were rendering unrotated in the wrong place: `Graphics`'s `TranslateTransform`/`RotateTransform` now apply to all drawing primitives (`DrawLine`/`DrawRectangle`/`DrawEllipse`/`DrawPolygon`/`DrawString`/`DrawBeziers`/`FillRectangle`/`FillEllipse` and every `DrawImage` overload), not just one `DrawImage` overload, and rotated ellipses now rotate in the correct (GDI+ clockwise) direction instead of mirrored; `Graphics.Save()`'s cloned transform is now disposed by `Restore()` instead of waiting on a finalizer
+- The Framing Assistant now mirrors a flipped sky-survey image on the correct axis: `TransformedBitmap`'s negative-`ScaleX`/`ScaleY` flip directions were swapped (OpenCV's `FlipMode.X` is a vertical flip, not horizontal, despite the name)
+- System.Windows.Compat: `TransformedBitmap` now supports every transform type - `TranslateTransform`, plus newly added `RotateTransform`/`MatrixTransform`/`TransformGroup` - through a general affine path that sizes the output to the transformed bounds like WPF, instead of silently copying the source unchanged for unhandled transform types; the parameterless-constructor + `BeginInit`/`EndInit` idiom no longer leaves the bitmap in a null-backed state that NREs on first use
+- System.Windows.Compat: `RenderTargetBitmap.Render` now renders `DrawGeometry` operations (`RectangleGeometry`/`PathGeometry`/`GeometryGroup`) instead of silently skipping them, and `DrawImage` now clips to the canvas instead of rejecting the entire draw when a rect is only partially out of bounds
+- System.Windows.Compat: `ResourceDictionary`'s indexer and `Add`/`TryGetValue` now share one real backing store instead of being two disconnected stores (the indexer setter previously dropped writes entirely)
+- System.Windows.Compat: `Colors.Green` now matches WPF's `#FF008000` instead of `(0,255,0)` (which is actually `Colors.Lime`)
+- System.Windows.Compat: `Rect.IsEmpty`/`Int32Rect.IsEmpty` now match WPF semantics (true only for the dedicated `Empty` sentinel/all-zero value) instead of treating any legitimately zero-width-or-height rect as empty
+- System.Windows.Compat: `DispatcherOperation.Status`/`Wait()` now reflect the backing task's actual state instead of always reporting `Completed` immediately; `UnmanagedImage(BitmapData).ToManagedImage()` no longer returns a bitmap backed by a null Mat; `DialogService.ClickButton` no longer NREs on a null button name
+- Removed the dead, unused `TouchNStars.Utility.DialogManagerExtensions` from System.Windows.Compat (zero callers anywhere in the solution)
+- System.Windows.Compat performance on large sensors: rotated `DrawString` now warps a glyph-sized buffer instead of two full-canvas frames per label, and `Blob.Area`/`Fullness` (a per-blob mask fill) are computed lazily on first access instead of eagerly for every contour of every star-detection frame
+- System.Windows.Compat: `CollectionViewSource.GetDefaultView` now caches one view per source collection (matching WPF) instead of returning a fresh view that discarded previously-set state, and the view now actually applies its `Filter` predicate consistently across enumeration, count, indexing, and `MoveCurrentTo`; a null source yields an empty view instead of one that NREs on first enumeration
+
 ## 1.1.47 - 2026-07-06
 ### Fixed
 - INDI Telescope: Equatorial slew completion no longer exits early on mounts that ack a goto with Ok/Idle instead of Busy for short slews

@@ -14,6 +14,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Windows.Input;
 
 namespace System.Windows {
@@ -124,9 +125,16 @@ namespace System.Windows.Data {
         public System.Collections.ObjectModel.ObservableCollection<GroupDescription> GroupDescriptions => _groupDescriptions;
         public SortDescriptionCollection SortDescriptions => _sortDescriptions;
 
+        // Real WPF caches the default view per source collection (by reference), so repeated
+        // calls for the same list return the same view instance and share Filter/Sort/Group
+        // state instead of silently discarding it. Callers (e.g. SequencerFactory) rely on this.
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, DefaultCollectionView> _defaultViews = new();
+
         public static System.ComponentModel.ICollectionView GetDefaultView(System.Collections.IEnumerable collection) {
-            // In headless mode, return a simple wrapper around the collection
-            return new DefaultCollectionView(collection);
+            if (collection == null) {
+                return new DefaultCollectionView(null);
+            }
+            return _defaultViews.GetValue(collection, c => new DefaultCollectionView((System.Collections.IEnumerable)c));
         }
     }
 
@@ -197,8 +205,11 @@ namespace System.Windows.Data {
         }
 
         public bool MoveCurrentTo(object item) {
+            // Enumerate through FilteredItems so the stored position indexes the same (filtered)
+            // sequence that GetCount/GetItemAt resolve against - iterating the raw collection
+            // here would desynchronize CurrentPosition from CurrentItem when a Filter is active.
             int index = 0;
-            foreach (var obj in _collection) {
+            foreach (var obj in FilteredItems()) {
                 if (obj == item) {
                     _currentPosition = index;
                     _currentItem = item;
@@ -227,33 +238,49 @@ namespace System.Windows.Data {
         }
 
         public bool Contains(object item) {
-            foreach (var obj in _collection) {
+            foreach (var obj in FilteredItems()) {
                 if (obj == item) return true;
             }
             return false;
         }
 
         public System.Collections.IEnumerator GetEnumerator() {
-            return _collection.GetEnumerator();
+            return FilteredItems().GetEnumerator();
+        }
+
+        // Filter is stored via the Filter property but WPF's ICollectionView only applies it
+        // through enumeration/lookup, never on the raw SourceCollection; every accessor below
+        // must go through this instead of iterating _collection directly.
+        private System.Collections.Generic.IEnumerable<object> FilteredItems() {
+            if (_collection == null) {
+                // GetDefaultView(null) hands out a view with no source; treat it as empty
+                // instead of NRE-ing on the first enumeration.
+                yield break;
+            }
+            foreach (var item in _collection) {
+                if (Filter == null || Filter(item)) {
+                    yield return item;
+                }
+            }
         }
 
         private int GetCount() {
-            if (_collection is System.Collections.ICollection col) {
+            if (Filter == null && _collection is System.Collections.ICollection col) {
                 return col.Count;
             }
             int count = 0;
-            foreach (var item in _collection) {
+            foreach (var item in FilteredItems()) {
                 count++;
             }
             return count;
         }
 
         private object GetItemAt(int index) {
-            if (_collection is System.Collections.IList list) {
+            if (Filter == null && _collection is System.Collections.IList list) {
                 return index >= 0 && index < list.Count ? list[index] : null;
             }
             int count = 0;
-            foreach (var item in _collection) {
+            foreach (var item in FilteredItems()) {
                 if (count == index) return item;
                 count++;
             }
@@ -408,6 +435,12 @@ namespace System.Windows {
             }
         }
 
+        public void ClearValue(DependencyProperty dp) {
+            if (dp != null) {
+                _propertyValues.Remove(dp);
+            }
+        }
+
         public void BeginAnimation(DependencyProperty dp, Media.Animation.AnimationTimeline animation) {
             // Stub for animation - in headless mode, animations are not executed
             // This method is called but doesn't actually animate anything
@@ -529,7 +562,7 @@ namespace System.Windows {
         public double MinWidth { get; set; }
         public object Style { get; set; }
         public object Content { get; set; }
-        public event EventHandler Closing;
+        public event CancelEventHandler Closing;
         public object DataContext { get; set; }
         public object Owner { get; set; }
         public WindowStartupLocation WindowStartupLocation { get; set; }
@@ -552,6 +585,11 @@ namespace System.Windows {
         public void Show() { }
         public void Hide() { IsVisible = false; }
         public void Close() {
+            var e = new CancelEventArgs(false);
+            Closing?.Invoke(this, e);
+            if (e.Cancel) {
+                return;
+            }
             Closed?.Invoke(this, EventArgs.Empty);
         }
         public bool Focus() => true;
@@ -609,17 +647,29 @@ namespace System.Windows {
 
         public ResourceDictionary() : base() { }
 
-        // Return sensible defaults for common resource keys in headless mode
+        // REVIEW.md F14: the indexer used to be entirely disconnected from the inherited
+        // Dictionary's real storage - the setter silently dropped writes, and the getter never
+        // consulted the real storage, so a resource written via Add() was invisible through the
+        // indexer and a resource written via the indexer was invisible to Add/TryGetValue/
+        // FindResource. Both now share the single real backing store.
         public new object this[object key] {
             get {
+                if (TryGetValue(key, out var value)) {
+                    return value;
+                }
+
+                // Fall back to a fabricated placeholder for graphics/geometry-shaped keys that
+                // were never actually registered, so existing icon lookups in headless mode
+                // (where no real icon resources are loaded) keep returning something drawable.
                 string keyStr = key?.ToString() ?? "";
-                // Return a default empty GeometryGroup for any graphics/geometry requests
                 if (keyStr.Contains("SVG") || keyStr.Contains("Icon") || keyStr.Contains("Geometry")) {
                     return new System.Windows.Media.GeometryGroup();
                 }
                 return null;
             }
-            set { } // No-op in headless mode — resources are not used for rendering
+            set {
+                base[key] = value;
+            }
         }
 
         public bool Contains(object key) {
