@@ -18,6 +18,7 @@ using NINA.Core.Model.Equipment;
 using NINA.Equipment.Equipment.MyCamera;
 using NINA.Equipment.Equipment.MyCamera.ToupTekAlike;
 using NINA.Equipment.Interfaces;
+using NINA.Equipment.Model;
 using NINA.Image.ImageData;
 using NINA.Profile.Interfaces;
 using NUnit.Framework;
@@ -123,6 +124,62 @@ namespace NINA.Test.Equipment.Camera {
             ToupTekAlikeOption.OPTION_RAW.ToToupTek().Should().Be(ToupCam.eOPTION.OPTION_RAW);
             ToupTekAlikeAAF.AAF_GETPOSITION.ToToupTek().Should().Be(ToupCam.eAAF.AAF_GETPOSITION);
             ToupCam.eEVENT.EVENT_IMAGE.ToEvent().Should().Be(ToupTekAlikeEvent.EVENT_IMAGE);
+        }
+
+        [Test]
+        public async Task StopExposure_ReArmsManualTriggerMode() {
+            // Trigger(0) stops the software trigger; without re-arming it the camera ignores every
+            // following Trigger(1) and only a reconnect brings it back.
+            var sdk = CreateExposableSdk();
+            var sut = CreateCamera(sdk.Object, CreateProfileService().Object);
+            (await sut.Connect(default)).Should().BeTrue();
+            sut.StartExposure(CreateBiasSequence());
+            sdk.Invocations.Clear();
+
+            sut.StopExposure();
+
+            sdk.Verify(x => x.Trigger(0), Times.Once);
+            sdk.Verify(x => x.put_Option(ToupTekAlikeOption.OPTION_TRIGGER, 1), Times.Once);
+        }
+
+        [Test]
+        public async Task DownloadExposure_DoesNotSoftFlushTheCamera() {
+            // A soft flush after every pull discards frames the camera is already delivering, which
+            // silences the pipeline during fast exposure loops until the camera is reconnected.
+            var sdk = CreateExposableSdk();
+            ToupTekAlikeCallback callback = null;
+            sdk.Setup(x => x.StartPullModeWithCallback(It.IsAny<ToupTekAlikeCallback>()))
+                .Callback<ToupTekAlikeCallback>(cb => callback = cb)
+                .Returns(true);
+            var frameInfo = new ToupTekAlikeFrameInfo();
+            sdk.Setup(x => x.PullImage(It.IsAny<ushort[]>(), It.IsAny<int>(), out frameInfo)).Returns(true);
+            var sut = CreateCamera(sdk.Object, CreateProfileService().Object);
+            (await sut.Connect(default)).Should().BeTrue();
+            sdk.Invocations.Clear();
+
+            sut.StartExposure(CreateBiasSequence());
+            callback.Should().NotBeNull();
+            callback.Invoke(ToupTekAlikeEvent.EVENT_IMAGE);
+            await sut.DownloadExposure(default);
+
+            sdk.Verify(x => x.PullImage(It.IsAny<ushort[]>(), It.IsAny<int>(), out frameInfo), Times.Once);
+            sdk.Verify(x => x.put_Option(ToupTekAlikeOption.OPTION_FLUSH, It.IsAny<int>()), Times.Never);
+        }
+
+        private static CaptureSequence CreateBiasSequence() {
+            return new CaptureSequence(0.001, CaptureSequence.ImageTypes.BIAS, null, new BinningMode(1, 1), 1);
+        }
+
+        private static Mock<IToupTekAlikeCameraSDK> CreateExposableSdk() {
+            var sdk = CreateConnectableSdk();
+            sdk.Setup(x => x.put_ROI(It.IsAny<uint>(), It.IsAny<uint>(), It.IsAny<uint>(), It.IsAny<uint>())).Returns(true);
+            sdk.Setup(x => x.put_ExpoTime(It.IsAny<uint>())).Returns(true);
+            sdk.Setup(x => x.Trigger(It.IsAny<ushort>())).Returns(true);
+
+            // BinX reads back from the SDK, and PullImage divides the frame size by it.
+            var binning = 1;
+            sdk.Setup(x => x.get_Option(ToupTekAlikeOption.OPTION_BINNING, out binning));
+            return sdk;
         }
 
         private ToupTekAlikeCamera CreateCamera(

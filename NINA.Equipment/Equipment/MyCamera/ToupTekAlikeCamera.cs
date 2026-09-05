@@ -823,10 +823,14 @@ namespace NINA.Equipment.Equipment.MyCamera {
             switch (nEvent) {
                 // We should get an EVENT_IMAGE every time that the camera tells us an image is ready
                 case ToupTekAlikeEvent.EVENT_IMAGE:
-                    var id = imageReadyTCS?.Task?.Id ?? -1;
+                    // Read the field once: this runs on the SDK callback thread while StartExposure
+                    // may be swapping in a new source on the sequencer thread, so repeated reads can
+                    // observe different instances and complete the wrong exposure.
+                    var tcs = imageReadyTCS;
+                    var id = tcs?.Task?.Id ?? -1;
                     if (id != -1) {
                         Logger.Trace($"{Category} - Setting DownloadExposure Result on Task {id}");
-                        var success = imageReadyTCS?.TrySetResult(true);
+                        var success = tcs.TrySetResult(true);
                         lastExposureEndTime = DateTime.UtcNow;
                         Logger.Trace($"{Category} - DownloadExposure Result on Task {id} set successfully: {success}");
                     } else {
@@ -886,9 +890,12 @@ namespace NINA.Equipment.Equipment.MyCamera {
                 return null;
             }
 
-            if (!sdk.put_Option(ToupTekAlikeOption.OPTION_FLUSH, 2)) {
-                Logger.Error($"{Category} - Unable to flush camera");
-            }
+            // Deliberately no OPTION_FLUSH here. A soft flush after every pull discards whatever the
+            // SDK has cached, and during fast exposure loops that raced with the frame the camera was
+            // already delivering: the pipeline went silent and every following Trigger() produced no
+            // EVENT_IMAGE until the camera was reconnected. indi_toupbase does not flush in the
+            // exposure path either. Flushing stays where a discard is actually wanted: on connect and
+            // when an exposure is stopped.
 
             var bitScaling = this.profileService.ActiveProfile.CameraSettings.BitScaling;
             if (bitScaling) {
@@ -1089,6 +1096,18 @@ namespace NINA.Equipment.Equipment.MyCamera {
                 Logger.Warning($"{Category} - Could not stop exposure");
             }
             imageReadyTCS?.TrySetCanceled();
+
+            // Trigger(0) stops the software trigger, and the camera then ignores every following
+            // Trigger(1) until manual trigger mode is armed again. Without this the camera stays dead
+            // after an aborted or timed out exposure and only a reconnect brings it back.
+            if (!LiveViewEnabled) {
+                if (!sdk.put_Option(ToupTekAlikeOption.OPTION_TRIGGER, 1)) {
+                    Logger.Error($"{Category} - Could not re-arm manual trigger mode after stopping the exposure");
+                }
+                if (!sdk.put_Option(ToupTekAlikeOption.OPTION_FLUSH, 3)) {
+                    Logger.Debug($"{Category} - Unable to flush camera after stopping the exposure");
+                }
+            }
         }
 
         public void StopLiveView() {
