@@ -174,6 +174,9 @@
   <data name="LblAltairCameraSetup" xml:space="preserve">
     <value>Altair 카메라 설정</value>
   </data>
+  <data name="LblAltAz" xml:space="preserve">
+    <value>Alt/Az</value>
+  </data>
   <data name="LblAlternativeUIColorSchema" xml:space="preserve">
     <value>사용자 색상 설정</value>
   </data>
@@ -1163,6 +1166,12 @@ Do you want to continue and lose the changes anyway?</value>
   </data>
   <data name="LblDitherPixelsMountDitherTooltip" xml:space="preserve">
     <value>디더링할 일반적인 픽셀 수입니다. 디더링은 목표 값을 중심으로 정규 분포를 따르며, 이 목표 값은 표준 편차를 사용합니다. 67%의 디더링이 이 범위 내에 있을 것입니다.</value>
+  </data>
+  <data name="LblMountDitherMinimumPixels" xml:space="preserve">
+    <value>Minimum dither movement</value>
+  </data>
+  <data name="LblMountDitherMinimumPixelsTooltip" xml:space="preserve">
+    <value>Minimum number of main camera pixels moved between successive Mount Dither positions. Set to 0 to preserve the existing random behavior. The value cannot exceed Dither Pixels.</value>
   </data>
   <data name="LblDitherRAOnly" xml:space="preserve">
     <value>Ra 만 디더링</value>
@@ -2622,6 +2631,9 @@ SharpCap을 설치하고 센서 분석을 수행한 경우 아래 드롭다운 �
   <data name="LblReadoutMode" xml:space="preserve">
     <value>모드</value>
   </data>
+  <data name="LblReadout" xml:space="preserve">
+    <value>Readout</value>
+  </data>
   <data name="LblReadoutModeTooltip" xml:space="preserve">
     <value>카메라의 읽기 모드에 해당하는 숫자</value>
   </data>
@@ -3281,6 +3293,9 @@ SharpCap을 설치하고 센서 분석을 수행한 경우 아래 드롭다운 �
   <data name="LblTooltipResetTarget" xml:space="preserve">
     <value>타겟 내 모든 시퀀스 목록의 진행도 초기화</value>
   </data>
+  <data name="LblTooltipResetTargetSet" xml:space="preserve">
+    <value>Reset progress of all targets in the current Target Set</value>
+  </data>
   <data name="LblTooltipStartSequence" xml:space="preserve">
     <value>시퀀스 시작</value>
   </data>
@@ -3490,6 +3505,9 @@ SharpCap을 설치하고 센서 분석을 수행한 경우 아래 드롭다운 �
   </data>
   <data name="LblURL" xml:space="preserve">
     <value>URL</value>
+  </data>
+  <data name="LblCopyURL" xml:space="preserve">
+    <value>Copy URL</value>
   </data>
   <data name="LblUSBLimit" xml:space="preserve">
     <value>USB Limit</value>
@@ -6286,8 +6304,20 @@ ASCOM 카메라 드라이버를 사용할 때만 관련이 있습니다!</value>
   <data name="LblDate" xml:space="preserve">
     <value>날짜</value>
   </data>
+  <data name="LblDay" xml:space="preserve">
+    <value>Day</value>
+  </data>
+  <data name="LblMonth" xml:space="preserve">
+    <value>Month</value>
+  </data>
+  <data name="LblYear" xml:space="preserve">
+    <value>Year</value>
+  </data>
   <data name="LblObservation" xml:space="preserve">
     <value>관측</value>
+  </data>
+  <data name="LblResetObservationTimeToCurrentTime" xml:space="preserve">
+    <value>Reset observation date and time to the current time</value>
   </data>
   <data name="LblCommand" xml:space="preserve">
     <value>명령</value>
@@ -6980,6 +7010,9 @@ ASCOM 카메라 드라이버를 사용할 때만 관련이 있습니다!</value>
   <data name="LblShowHistogram" xml:space="preserve">
     <value>히스토그램 보기</value>
   </data>
+  <data name="LblShowHorizon" xml:space="preserve">
+    <value>Show Local Horizon</value>
+  </data>
   <data name="LblShowStarMeasurementsInArcseconds" xml:space="preserve">
     <value>Show star measurements in arcseconds</value>
   </data>
@@ -7198,6 +7231,18 @@ ASCOM 카메라 드라이버를 사용할 때만 관련이 있습니다!</value>
   <data name="LblLight" xml:space="preserve">
     <value>Light</value>
     <comment>Light as in light bulb</comment>
+  </data>
+  <data name="Lbl_SequenceItem_Utility_LoadImagingLayout_Description" xml:space="preserve">
+    <value>Loads an Imaging tab layout from a saved dock configuration file</value>
+  </data>
+  <data name="Lbl_SequenceItem_Utility_LoadImagingLayout_Name" xml:space="preserve">
+    <value>Load Imaging Layout</value>
+  </data>
+  <data name="Lbl_SequenceItem_Utility_LoadImagingLayout_Validation_InvalidLayout" xml:space="preserve">
+    <value>The selected file is not a valid Imaging layout backup</value>
+  </data>
+  <data name="Lbl_SequenceItem_Utility_LoadImagingLayout_Validation_InvalidPath" xml:space="preserve">
+    <value>Select an existing Imaging layout backup file</value>
   </data>
   <data name="Lbl_SequenceItem_Utility_SaveSequence_Description" xml:space="preserve">
     <value>Saves the current sequence at the specified file path</value>
@@ -8076,5 +8121,17 @@ This is useful when a built-in trigger has the timing you need, but you want cus
   </data>
   <data name="Lbl_SequenceTrigger_TriggerOnUnsafe_AfterWaitingUntilSafe_HelpDescription" xml:space="preserve">
     <value>Instructions that run after conditions are safe again.</value>
+  </data>
+  <data name="LblPHD2GuideChartShowStarMass" xml:space="preserve">
+    <value>Show Star Mass in Guide Graph</value>
+  </data>
+  <data name="LblPHD2GuideChartShowSNR" xml:space="preserve">
+    <value>Show Star SNR in Guide Graph</value>
+  </data>
+  <data name="LblStarMass" xml:space="preserve">
+    <value>Star Mass</value>
+  </data>
+  <data name="LblStarSNR" xml:space="preserve">
+    <value>Star SNR</value>
   </data>
 </root>

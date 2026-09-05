@@ -148,7 +148,7 @@ namespace NINA.WPF.Base.ViewModel.Equipment.Camera {
                 });
 
                 Cam.CoolerOn = true;
-                return await RegulateTemperature(temperature, duration, true, progressRouter, ct);
+                return await RegulateTemperature(temperature, duration, progressRouter, ct);
             } catch (CannotReachTargetTemperatureException) {
                 Logger.Error($"Could not reach target temperature. Target Temp: {temperature}, Current Temp: {Cam.Temperature}");
                 Notification.ShowError(Loc.Instance["LblCouldNotReachTargetTemperature"]);
@@ -174,7 +174,7 @@ namespace NINA.WPF.Base.ViewModel.Equipment.Camera {
                     using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     try {
                         timeoutCts.CancelAfter(duration + TimeSpan.FromMinutes(15));
-                        await RegulateTemperature(20, duration, false, progressRouter, timeoutCts.Token);
+                        await RegulateTemperature(20, duration, progressRouter, timeoutCts.Token);
                     } catch (OperationCanceledException) {
                         if (ct.IsCancellationRequested == true) {
                             throw;
@@ -195,7 +195,7 @@ namespace NINA.WPF.Base.ViewModel.Equipment.Camera {
             }
         }
 
-        private async Task<bool> RegulateTemperature(double temperature, TimeSpan duration, bool cooling, IProgress<double> progress, CancellationToken ct) {
+        private async Task<bool> RegulateTemperature(double temperature, TimeSpan duration, IProgress<double> progress, CancellationToken ct) {
             try {
                 double currentTemp = Cam.Temperature;
                 var totalDeltaTemp = Math.Abs(currentTemp - temperature);
@@ -223,16 +223,15 @@ namespace NINA.WPF.Base.ViewModel.Equipment.Camera {
                         await CoreUtil.Wait(interval, ct);
                         currentTemp = Cam.Temperature;
                     }
-                } else {
-                    Cam.TemperatureSetPoint = temperature;
                 }
+                Cam.TemperatureSetPoint = temperature;
 
                 // Wait for final step
                 var timeout = TimeSpan.FromMinutes(2);
                 var idleTime = TimeSpan.Zero;
                 var progressThreshold = 0.5d;
                 var previousTemperature = currentTemp;
-                while ((cooling && currentTemp > (temperature + 1)) || (!cooling && currentTemp < (temperature - 1))) {
+                while (Math.Abs(currentTemp - temperature) > 1) {
                     var progressTemp = Math.Abs(currentTemp - temperature);
                     progress.Report((totalDeltaTemp - progressTemp) / totalDeltaTemp);
 
@@ -665,6 +664,7 @@ namespace NINA.WPF.Base.ViewModel.Equipment.Camera {
             return new AsyncEnumerable<IExposureData>(async yield => {
                 if (CameraInfo.Connected) {
                     try {
+                        ApplyReadoutModeForSequence(sequence);
                         SetGain(sequence.Gain);
                         SetOffset(sequence.Offset);
                         if (sequence.Binning == null) {
@@ -721,6 +721,7 @@ namespace NINA.WPF.Base.ViewModel.Equipment.Camera {
 
         public async Task Capture(CaptureSequence sequence, CancellationToken token, IProgress<ApplicationStatus> progress) {
             if (CameraInfo.Connected == true) {
+                ApplyReadoutModeForSequence(sequence);
                 SetGain(sequence.Gain);
                 SetOffset(sequence.Offset);
                 if (sequence.Binning == null) {
@@ -805,6 +806,13 @@ namespace NINA.WPF.Base.ViewModel.Equipment.Camera {
                 Cam.ReadoutMode = CameraInfo.ReadoutMode = mode;
                 BroadcastCameraInfo();
             }
+        }
+
+        private void ApplyReadoutModeForSequence(CaptureSequence sequence) {
+            short mode = sequence.ImageType == CaptureSequence.ImageTypes.SNAPSHOT
+                ? Cam.ReadoutModeForSnapImages
+                : Cam.ReadoutModeForNormalImages;
+            SetReadoutMode(mode);
         }
 
         public void SetUSBLimit(int usbLimit) {

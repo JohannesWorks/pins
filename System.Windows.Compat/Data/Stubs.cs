@@ -315,6 +315,22 @@ namespace System.Windows.Data {
         public static readonly object DoNothing = new object();
     }
 
+    /// <summary>
+    /// Binding plumbing. Headless has no binding engine, so a binding set here never transfers
+    /// a value - the target property keeps whatever it was assigned directly.
+    /// </summary>
+    public static class BindingOperations {
+        public static BindingExpressionBase SetBinding(DependencyObject target, DependencyProperty dp, BindingBase binding) => null;
+
+        public static void ClearBinding(DependencyObject target, DependencyProperty dp) { }
+
+        public static void ClearAllBindings(DependencyObject target) { }
+
+        public static BindingExpressionBase GetBindingExpressionBase(DependencyObject target, DependencyProperty dp) => null;
+    }
+
+    public class BindingExpressionBase { }
+
     public interface IValueConverter { }
     public class BindingBase { }
     public enum BindingMode { OneWay, TwoWay, OneTime, OneWayToSource, Default }
@@ -339,7 +355,7 @@ namespace System.Windows.Data {
         public System.Type TargetType { get; }
     }
 
-    public class BindingExpression {
+    public class BindingExpression : BindingExpressionBase {
         public object ResolvedSource { get; set; }
     }
 }
@@ -580,6 +596,8 @@ namespace System.Windows {
         public double Width { get; set; } = 800;
         public double Height { get; set; } = 600;
         public bool Topmost { get; set; }
+        public bool ShowActivated { get; set; } = true;
+        public bool ShowInTaskbar { get; set; } = true;
 
         public bool? ShowDialog() => true;
         public void Show() { }
@@ -708,6 +726,21 @@ namespace System.Windows {
 
         public static Point operator -(Point point, Vector vector) =>
             new Point(point.X - vector.X, point.Y - vector.Y);
+
+        // Exact coordinate comparison, matching WPF's Point operators - two points are equal
+        // only if both components are bit-identical.
+        public static bool operator ==(Point point1, Point point2) =>
+            point1.X == point2.X && point1.Y == point2.Y;
+
+        public static bool operator !=(Point point1, Point point2) => !(point1 == point2);
+
+        public bool Equals(Point other) => this == other;
+
+        public override bool Equals(object obj) => obj is Point other && this == other;
+
+        public override int GetHashCode() => HashCode.Combine(X, Y);
+
+        public override string ToString() => $"{X},{Y}";
     }
 
     public struct Size {
@@ -738,6 +771,22 @@ namespace System.Windows {
         }
 
         public double Length => OpenCvSharp.Cv2.Norm(_vec);
+
+        /// <summary>
+        /// Squared length. Worth preferring over <see cref="Length"/> when only comparing
+        /// magnitudes, since it skips the square root.
+        /// </summary>
+        public double LengthSquared => X * X + Y * Y;
+
+        /// <summary>
+        /// Dot product, matching WPF's Vector.Multiply(Vector, Vector).
+        /// </summary>
+        public static double Multiply(Vector vector1, Vector vector2) =>
+            vector1.X * vector2.X + vector1.Y * vector2.Y;
+
+        public static Vector Multiply(Vector vector, double scalar) => vector * scalar;
+
+        public static Vector Multiply(double scalar, Vector vector) => vector * scalar;
 
         public void Normalize() {
             double length = Length;
@@ -848,6 +897,14 @@ namespace System.Windows.Controls {
         }
     }
 
+    public class Image : System.Windows.FrameworkElement {
+        public static readonly DependencyProperty SourceProperty = DependencyProperty.Register("Source", typeof(System.Windows.Media.ImageSource), typeof(Image));
+        public static readonly DependencyProperty StretchProperty = DependencyProperty.Register("Stretch", typeof(System.Windows.Media.Stretch), typeof(Image));
+
+        public System.Windows.Media.ImageSource Source { get; set; }
+        public System.Windows.Media.Stretch Stretch { get; set; }
+    }
+
     public class Border : System.Windows.FrameworkElement {
         public object Child { get; set; }
     }
@@ -895,6 +952,9 @@ namespace System.Windows {
     /// Provides the base class for framework content elements.
     /// </summary>
     public class FrameworkContentElement : DependencyObject {
+        public static readonly DependencyProperty ContextMenuProperty =
+            DependencyProperty.Register("ContextMenu", typeof(System.Windows.Controls.ContextMenu), typeof(FrameworkContentElement), new PropertyMetadata(null));
+
         public DependencyObject Parent { get; set; }
         public DependencyObject TemplatedParent { get; set; }
     }

@@ -71,6 +71,17 @@ namespace System.Drawing {
         public PixelOffsetMode PixelOffsetMode { get; set; }
 
         /// <summary>
+        /// How drawn pixels combine with the canvas. SourceOver alpha-blends (the GDI+ default
+        /// and the behaviour of this class before the property existed); SourceCopy overwrites.
+        /// </summary>
+        public CompositingMode CompositingMode { get; set; } = CompositingMode.SourceOver;
+
+        /// <summary>
+        /// Compositing quality hint (for compatibility)
+        /// </summary>
+        public CompositingQuality CompositingQuality { get; set; } = CompositingQuality.Default;
+
+        /// <summary>
         /// Text rendering hint for text quality (for compatibility)
         /// </summary>
         public Text.TextRenderingHint TextRenderingHint { get; set; }
@@ -403,6 +414,67 @@ namespace System.Drawing {
         }
 
         /// <summary>
+        /// Draws a series of connected line segments (an open polyline)
+        /// </summary>
+        public void DrawLines(Pen pen, PointF[] points) {
+            if (points == null || points.Length < 2) return;
+
+            var transformed = new PointF[points.Length];
+            for (int i = 0; i < points.Length; i++) {
+                transformed[i] = TransformPoint(points[i].X, points[i].Y);
+            }
+            DrawPolylineRaw(pen, transformed, false);
+        }
+
+        /// <summary>
+        /// Fills a polygon with the specified brush. A HatchBrush is rendered as a real pattern
+        /// clipped to the polygon; every other brush fills flat.
+        /// </summary>
+        public void FillPolygon(Brush brush, PointF[] points) {
+            if (points == null || points.Length < 3) return;
+
+            var cvPoints = new OpenCvSharp.Point[points.Length];
+            for (int i = 0; i < points.Length; i++) {
+                PointF transformed = TransformPoint(points[i].X, points[i].Y);
+                cvPoints[i] = new OpenCvSharp.Point((int)transformed.X, (int)transformed.Y);
+            }
+
+            if (brush is Drawing2D.HatchBrush hatchBrush) {
+                FillPolygonHatched(hatchBrush, cvPoints);
+                return;
+            }
+            Cv2.FillPoly(_canvas, new OpenCvSharp.Point[][] { cvPoints }, brush.ToScalar(), LineTypes.AntiAlias);
+        }
+
+        /// <summary>
+        /// Renders a hatch pattern into a scratch patch the size of the polygon's bounding box
+        /// and copies it through a polygon-shaped mask. Going via the bounding box rather than
+        /// the whole canvas keeps the cost proportional to the polygon; the patch's canvas
+        /// position is handed to the brush so the pattern stays phase-aligned to the canvas.
+        /// </summary>
+        private void FillPolygonHatched(Drawing2D.HatchBrush brush, OpenCvSharp.Point[] points) {
+            OpenCvSharp.Rect roi = Cv2.BoundingRect(points)
+                .Intersect(new OpenCvSharp.Rect(0, 0, _canvas.Width, _canvas.Height));
+            if (roi.Width <= 0 || roi.Height <= 0) {
+                return;
+            }
+
+            var shifted = new OpenCvSharp.Point[points.Length];
+            for (int i = 0; i < points.Length; i++) {
+                shifted[i] = new OpenCvSharp.Point(points[i].X - roi.X, points[i].Y - roi.Y);
+            }
+
+            using var patch = new Mat(roi.Height, roi.Width, _canvas.Type());
+            using var mask = new Mat(roi.Height, roi.Width, MatType.CV_8UC1, Scalar.All(0));
+            using var destination = new Mat(_canvas, roi);
+            brush.DrawPattern(patch, roi.X, roi.Y);
+            // Link8, not AntiAlias: CopyTo treats any non-zero mask byte as fully opaque, so an
+            // anti-aliased mask would widen the edge to a hard jagged fringe rather than soften it.
+            Cv2.FillPoly(mask, new OpenCvSharp.Point[][] { shifted }, Scalar.All(255), LineTypes.Link8);
+            patch.CopyTo(destination, mask);
+        }
+
+        /// <summary>
         /// Draws a closed or open polyline through already-transformed points, with no further
         /// transform applied - used internally by DrawPolygon/DrawRectangle once their input
         /// points have already been run through TransformPoint.
@@ -525,6 +597,33 @@ namespace System.Drawing {
         }
 
         /// <summary>
+        /// Scales the transformation matrix
+        /// </summary>
+        public void ScaleTransform(float sx, float sy) {
+            var scale = new Mat(2, 3, MatType.CV_64F);
+            scale.Set(0, 0, (double)sx);
+            scale.Set(0, 1, 0.0);
+            scale.Set(0, 2, 0.0);
+            scale.Set(1, 0, 0.0);
+            scale.Set(1, 1, (double)sy);
+            scale.Set(1, 2, 0.0);
+
+            try {
+                if (!_hasTransform) {
+                    _transform?.Dispose();
+                    _transform = scale.Clone();
+                } else {
+                    var newTransform = MultiplyTransforms(_transform, scale);
+                    _transform?.Dispose();
+                    _transform = newTransform;
+                }
+                _hasTransform = true;
+            } finally {
+                scale.Dispose();
+            }
+        }
+
+        /// <summary>
         /// Rotates the transformation matrix
         /// </summary>
         public void RotateTransform(float angle) {
@@ -568,6 +667,144 @@ namespace System.Drawing {
             _transform.Set(1, 1, 1.0);
             _transform.Set(1, 2, 0.0);
             _hasTransform = false;
+        }
+
+        /// <summary>
+        /// Draws the source rectangle of an image into the parallelogram described by three
+        /// destination points (upper-left, upper-right, lower-left), as GDI+ does. The current
+        /// transform is applied to those points, so callers can combine this with
+        /// TranslateTransform/RotateTransform.
+        /// </summary>
+        public void DrawImage(Bitmap image, PointF[] destPoints, RectangleF srcRect, GraphicsUnit unit, ImageAttributes imageAttrs) {
+            if (image == null) return;
+            if (destPoints == null || destPoints.Length < 3) {
+                throw new ArgumentException("Three destination points are required.", nameof(destPoints));
+            }
+
+            using (Mat srcMat = image.GetMat()) {
+                if (srcMat == null || srcMat.Empty()) return;
+                if (_canvas == null || _canvas.Empty()) return;
+
+                // Clamp the source rectangle to the image, then crop to it.
+                int srcX = Math.Max(0, Math.Min((int)srcRect.X, srcMat.Width - 1));
+                int srcY = Math.Max(0, Math.Min((int)srcRect.Y, srcMat.Height - 1));
+                int srcWidth = Math.Min((int)srcRect.Width, srcMat.Width - srcX);
+                int srcHeight = Math.Min((int)srcRect.Height, srcMat.Height - srcY);
+                if (srcWidth <= 0 || srcHeight <= 0) return;
+
+                Mat croppedSrc;
+                bool croppedSrcCreated = false;
+                if (srcX == 0 && srcY == 0 && srcWidth == srcMat.Width && srcHeight == srcMat.Height) {
+                    croppedSrc = srcMat;
+                } else {
+                    using (Mat roiMat = new Mat(srcMat, new OpenCvSharp.Rect(srcX, srcY, srcWidth, srcHeight))) {
+                        croppedSrc = roiMat.Clone();
+                    }
+                    croppedSrcCreated = true;
+                }
+
+                // Ensure source has alpha channel if canvas does
+                Mat srcWithAlpha = croppedSrc;
+                bool needsAlphaCleanup = false;
+                if (_canvas.Channels() == 4 && croppedSrc.Channels() == 3) {
+                    srcWithAlpha = new Mat();
+                    Cv2.CvtColor(croppedSrc, srcWithAlpha, ColorConversionCodes.BGR2BGRA);
+                    needsAlphaCleanup = true;
+                }
+
+                try {
+                    // The three source corners matching destPoints' upper-left/upper-right/lower-left order
+                    Point2f[] srcPoints = new Point2f[] {
+                        new Point2f(0, 0),
+                        new Point2f(srcWithAlpha.Width, 0),
+                        new Point2f(0, srcWithAlpha.Height)
+                    };
+
+                    // Push the destination parallelogram through the current transform
+                    Point2f[] dstPoints = new Point2f[3];
+                    for (int i = 0; i < 3; i++) {
+                        double x = destPoints[i].X;
+                        double y = destPoints[i].Y;
+                        if (_hasTransform) {
+                            dstPoints[i].X = (float)(_transform.At<double>(0, 0) * x + _transform.At<double>(0, 1) * y + _transform.At<double>(0, 2));
+                            dstPoints[i].Y = (float)(_transform.At<double>(1, 0) * x + _transform.At<double>(1, 1) * y + _transform.At<double>(1, 2));
+                        } else {
+                            dstPoints[i].X = (float)x;
+                            dstPoints[i].Y = (float)y;
+                        }
+                    }
+
+                    BorderTypes borderType = ToBorderType(imageAttrs);
+
+                    using (Mat affineTransform = Cv2.GetAffineTransform(srcPoints, dstPoints)) {
+                        using (var transformed = new Mat(_canvas.Size(), _canvas.Type(), Scalar.All(0))) {
+                            Cv2.WarpAffine(srcWithAlpha, transformed, affineTransform, _canvas.Size(),
+                                ToInterpolationFlags(this.InterpolationMode), borderType);
+
+                            if (transformed.Channels() == 4 && _canvas.Channels() == 4) {
+                                AlphaBlend(transformed, _canvas);
+                            } else {
+                                // Mask the warped area so genuinely black source pixels are not dropped
+                                using var mask = new Mat(srcWithAlpha.Size(), MatType.CV_8UC1, Scalar.All(255));
+                                using var transformedMask = new Mat(_canvas.Size(), MatType.CV_8UC1, Scalar.All(0));
+                                Cv2.WarpAffine(mask, transformedMask, affineTransform, _canvas.Size(),
+                                    InterpolationFlags.Nearest, BorderTypes.Constant, new Scalar(0));
+                                transformed.CopyTo(_canvas, transformedMask);
+                            }
+                        }
+                    }
+                } finally {
+                    if (needsAlphaCleanup) {
+                        srcWithAlpha?.Dispose();
+                    }
+                    if (croppedSrcCreated) {
+                        croppedSrc?.Dispose();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Maps a GDI+ wrap mode onto the closest OpenCV border mode. TileFlipXY mirrors the
+        /// source at its edges, which Reflect reproduces; everything else falls back to the
+        /// transparent border used elsewhere in this class.
+        /// </summary>
+        private static BorderTypes ToBorderType(ImageAttributes imageAttrs) {
+            if (imageAttrs == null) {
+                return BorderTypes.Transparent;
+            }
+
+            switch (imageAttrs.WrapMode) {
+                case WrapMode.TileFlipX:
+                case WrapMode.TileFlipY:
+                case WrapMode.TileFlipXY:
+                    return BorderTypes.Reflect;
+
+                case WrapMode.Clamp:
+                    return BorderTypes.Replicate;
+
+                default:
+                    // Tile maps to BORDER_WRAP, which warpAffine rejects, so it falls through here.
+                    return BorderTypes.Transparent;
+            }
+        }
+
+        /// <summary>
+        /// Maps the configured InterpolationMode onto the matching OpenCV interpolation flag.
+        /// </summary>
+        private static InterpolationFlags ToInterpolationFlags(InterpolationMode mode) {
+            switch (mode) {
+                case InterpolationMode.NearestNeighbor:
+                    return InterpolationFlags.Nearest;
+
+                case InterpolationMode.Low:
+                case InterpolationMode.Bilinear:
+                case InterpolationMode.HighQualityBilinear:
+                    return InterpolationFlags.Linear;
+
+                default:
+                    return InterpolationFlags.Cubic;
+            }
         }
 
         /// <summary>
@@ -669,7 +906,8 @@ namespace System.Drawing {
                         if (dstRoi.Width > 0 && dstRoi.Height > 0) {
                             using (var dstRegion = new Mat(_canvas, dstRoi)) {
                                 if (srcWithAlpha.Size() == dstRegion.Size()) {
-                                    if (srcWithAlpha.Channels() == 4 && dstRegion.Channels() == 4) {
+                                    if (CompositingMode != CompositingMode.SourceCopy
+                                            && srcWithAlpha.Channels() == 4 && dstRegion.Channels() == 4) {
                                         AlphaBlend(srcWithAlpha, dstRegion);
                                     } else {
                                         srcWithAlpha.CopyTo(dstRegion);
@@ -781,6 +1019,14 @@ namespace System.Drawing {
             // finalizer for the native Mat buffer.
             state.Transform?.Dispose();
         }
+
+        /// <summary>
+        /// The bounding rectangle of the visible drawing surface. This shim tracks no clip
+        /// region, so the answer is always the full canvas in device pixels. GDI+ reports this
+        /// in world coordinates, so under a non-identity transform the two would disagree -
+        /// callers here read it under the identity transform.
+        /// </summary>
+        public RectangleF VisibleClipBounds => new RectangleF(0, 0, _canvas.Width, _canvas.Height);
 
         /// <summary>
         /// Fills a rectangle with the specified brush

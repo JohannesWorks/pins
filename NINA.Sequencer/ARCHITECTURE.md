@@ -87,6 +87,8 @@ The `Logic/` area is a distinct subsystem:
 
 This subsystem is the reason the project consumes the `NINA.Sequencer.Generators` analyzer.
 
+NCalc is an internal expression-engine implementation detail. Public and plugin-facing symbol APIs must use NINA-owned contracts such as `ISymbolFunctionArguments`; they must not expose NCalc types. `ISymbolFunctionArguments.Evaluate(int)` intentionally preserves lazy argument evaluation, so conditional functions should evaluate only the branch they select. Keep NCalc version-specific event arguments and parameter access contained in the internal adapter.
+
 ## Dependency Position
 
 Project references:
@@ -109,3 +111,4 @@ The project is referenced by the main app, the plugin layer, the installer, and 
 - Add MEF export metadata (`Name`, `Description`, `Icon`, `Category`) for anything that should appear in the sequencer UI or plugin loader registries.
 - Keep JSON compatibility in mind; serialization depends on the existing converters and prototype factory model.
 - If you use expression-backed properties, follow the generator-based pattern already used in this project instead of hand-writing the same boilerplate.
+- Generated expression properties release their symbol consumers automatically. A hand-written `Expression` owner must release the previous value when replacing it and override `ReleaseExpressionConsumers()` so detaching its sequence graph releases the current value.

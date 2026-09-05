@@ -43,7 +43,20 @@ namespace System.Windows.Media {
     /// </summary>
     public struct Matrix {
         public static Matrix Identity => new Matrix { M11 = 1, M22 = 1, M12 = 0, M21 = 0, OffsetX = 0, OffsetY = 0 };
-        
+
+        /// <summary>
+        /// Element order matches WPF's Matrix(m11, m12, m21, m22, offsetX, offsetY) - row-vector
+        /// convention, so a point is transformed as v * M.
+        /// </summary>
+        public Matrix(double m11, double m12, double m21, double m22, double offsetX, double offsetY) {
+            M11 = m11;
+            M12 = m12;
+            M21 = m21;
+            M22 = m22;
+            OffsetX = offsetX;
+            OffsetY = offsetY;
+        }
+
         public double M11 { get; set; }
         public double M12 { get; set; }
         public double M21 { get; set; }
@@ -56,6 +69,29 @@ namespace System.Windows.Media {
                 point.X * M11 + point.Y * M21 + OffsetX,
                 point.X * M12 + point.Y * M22 + OffsetY
             );
+        }
+
+        /// <summary>
+        /// Appends a rotation of <paramref name="angle"/> degrees about the point
+        /// (<paramref name="centerX"/>, <paramref name="centerY"/>), as WPF's Matrix.RotateAt
+        /// does: the rotation is applied after whatever this matrix already represents.
+        /// </summary>
+        public void RotateAt(double angle, double centerX, double centerY) {
+            double radians = angle * Math.PI / 180.0;
+            double cos = Math.Cos(radians);
+            double sin = Math.Sin(radians);
+
+            // Row-vector rotation, so a point maps as p' = (p - c) * R + c, which is R with the
+            // offset c - c * R folded in.
+            var rotateAt = new Matrix(
+                cos,
+                sin,
+                -sin,
+                cos,
+                centerX - (centerX * cos) + (centerY * sin),
+                centerY - (centerX * sin) - (centerY * cos));
+
+            this = Multiply(this, rotateAt);
         }
 
         /// <summary>

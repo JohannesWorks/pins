@@ -12,8 +12,6 @@
 
 #endregion "copyright"
 
-using Namotion.Reflection;
-using NCalc.Handlers;
 using NINA.Astrometry;
 using NINA.Core.Enum;
 using NINA.Core.Model;
@@ -102,6 +100,9 @@ namespace NINA.Sequencer.Logic {
         private IImagingMediator _imagingMediator;
         private IGuiderMediator _guiderMediator;
         private ConcurrentDictionary<string, IList<Symbol>> _hiddenSymbols = new ConcurrentDictionary<string, IList<Symbol>>();
+        private readonly object _imageStatisticsPumpLock = new object();
+        private bool _imageStatisticsPumpRunning;
+        private (IImageData ImageData, long Version)? _pendingImageStatistics;
         private long _imageSymbolVersion;
         private ObserveAllCollection<FilterInfo> _watchedFilterList;
 
@@ -586,7 +587,9 @@ namespace NINA.Sequencer.Logic {
                     }
                 }
 
-                Logger.Info($"Removing all symbols from: {source} ({count})");
+                if (count > 0) {
+                    Logger.Info($"Removing all symbols from: {source} ({count})");
+                }
             }
             PublishSymbolChanges(changes);
         }
@@ -834,7 +837,7 @@ namespace NINA.Sequencer.Logic {
             }
         }
 
-        public void InvokeFunction(string name, FunctionArgs args, out object result, out bool isVolatile) {
+        public void InvokeFunction(string name, ISymbolFunctionArguments args, out object result, out bool isVolatile) {
             result = null;
             isVolatile = false;
 
@@ -1046,13 +1049,38 @@ namespace NINA.Sequencer.Logic {
         }
 
         private void QueueSetImageStatisticsSymbols(IImageData imageData, long imageSymbolVersion) {
-            _ = Task.Run(async () => {
+            lock (_imageStatisticsPumpLock) {
+                _pendingImageStatistics = (imageData, imageSymbolVersion);
+                if (_imageStatisticsPumpRunning) {
+                    return;
+                }
+                _imageStatisticsPumpRunning = true;
+            }
+
+            _ = Task.Run(ProcessImageStatisticsQueueAsync);
+        }
+
+        private async Task ProcessImageStatisticsQueueAsync() {
+            while (true) {
+                (IImageData ImageData, long Version)? work;
+                lock (_imageStatisticsPumpLock) {
+                    work = _pendingImageStatistics;
+                    _pendingImageStatistics = null;
+                    if (work == null) {
+                        _imageStatisticsPumpRunning = false;
+                        return;
+                    }
+                }
+
                 try {
-                    await SetImageStatisticsSymbolsAsync(imageData, imageSymbolVersion).ConfigureAwait(false);
+                    if (work.Value.Version != Interlocked.Read(ref _imageSymbolVersion)) {
+                        continue;
+                    }
+                    await SetImageStatisticsSymbolsAsync(work.Value.ImageData, work.Value.Version).ConfigureAwait(false);
                 } catch (Exception ex) {
                     Logger.Error("Failed to update image statistics symbols", ex);
                 }
-            });
+            }
         }
 
         internal async Task SetImageStatisticsSymbolsAsync(IImageData imageData, long imageSymbolVersion) {

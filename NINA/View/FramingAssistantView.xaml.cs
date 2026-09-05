@@ -19,7 +19,6 @@ using NINA.CustomControlLibrary;
 using NINA.Profile;
 using NINA.ViewModel.FramingAssistant;
 using System;
-using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -27,7 +26,6 @@ using System.Threading.Tasks;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
 
 namespace NINA.View {
 
@@ -51,9 +49,28 @@ namespace NINA.View {
             }
         }
 
-        private void Hyperlink_RequestNavigate(object sender, RequestNavigateEventArgs e) {
-            Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
-            e.Handled = true;
+        private void ObservationMonth_StepRequested(object sender, StepRequestedEventArgs e) {
+            AdjustObservationTime(sender, e, FramingAssistantTimePart.Month);
+        }
+
+        private void ObservationDay_StepRequested(object sender, StepRequestedEventArgs e) {
+            AdjustObservationTime(sender, e, FramingAssistantTimePart.Day);
+        }
+
+        private void ObservationHour_StepRequested(object sender, StepRequestedEventArgs e) {
+            AdjustObservationTime(sender, e, FramingAssistantTimePart.Hour);
+        }
+
+        private void ObservationMinute_StepRequested(object sender, StepRequestedEventArgs e) {
+            AdjustObservationTime(sender, e, FramingAssistantTimePart.Minute);
+        }
+
+        private static void AdjustObservationTime(object sender, StepRequestedEventArgs e, FramingAssistantTimePart part) {
+            if (sender is IntStepperControl stepper
+                && stepper.GetBindingExpression(IntStepperControl.ValueProperty)?.ResolvedSource is FramingAssistantTimeContext context) {
+                e.Handled = true;
+                context.Adjust(part, e.Direction);
+            }
         }
 
         private void UnitTextBox_Pasting(object sender, System.Windows.DataObjectPastingEventArgs e) {

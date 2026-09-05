@@ -28,7 +28,6 @@ using NINA.Sequencer.Validations;
 using NINA.Astrometry.RiseAndSet;
 using Nito.AsyncEx;
 using NINA.Sequencer.Generators;
-using Microsoft.Extensions.Options;
 using NINA.Sequencer.Logic;
 using System.Runtime.Serialization;
 
@@ -82,6 +81,10 @@ namespace NINA.Sequencer.SequenceItem.Utility {
         }
 
         private bool MustWait() {
+            if (!double.IsFinite(Data.CurrentAltitude)) {
+                return true;
+            }
+
             switch (Data.Comparator) {
                 case ComparisonOperatorEnum.GREATER_THAN:
                     return Data.CurrentAltitude > GetDataOffset();

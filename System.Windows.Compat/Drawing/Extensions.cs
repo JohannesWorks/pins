@@ -19,6 +19,31 @@ using System.IO;
 namespace System.Drawing
 {
     /// <summary>
+    /// Specifies the rotation and flip to apply to an image. The values are the GDI+ ones:
+    /// the low two bits carry the clockwise rotation in 90 degree steps, the third bit a
+    /// horizontal flip, which is why several names share a value.
+    /// </summary>
+    public enum RotateFlipType
+    {
+        RotateNoneFlipNone = 0,
+        Rotate90FlipNone = 1,
+        Rotate180FlipNone = 2,
+        Rotate270FlipNone = 3,
+        RotateNoneFlipX = 4,
+        Rotate90FlipX = 5,
+        Rotate180FlipX = 6,
+        Rotate270FlipX = 7,
+        RotateNoneFlipY = Rotate180FlipX,
+        Rotate90FlipY = Rotate270FlipX,
+        Rotate180FlipY = RotateNoneFlipX,
+        Rotate270FlipY = Rotate90FlipX,
+        RotateNoneFlipXY = Rotate180FlipNone,
+        Rotate90FlipXY = Rotate270FlipNone,
+        Rotate180FlipXY = RotateNoneFlipNone,
+        Rotate270FlipXY = Rotate90FlipNone
+    }
+
+    /// <summary>
     /// Base class for images
     /// </summary>
     public class Image : IDisposable
@@ -58,38 +83,56 @@ namespace System.Drawing
 
         public Bitmap(int width, int height, PixelFormat format)
         {
-            MatType matType;
+            _createdFormat = format;
+            _mat = new Mat(height, width, ToMatType(format));
+            // Initialize to zero
+            _mat.SetTo(OpenCvSharp.Scalar.All(0));
+        }
+
+        /// <summary>
+        /// Wraps an existing pixel buffer in place, mirroring
+        /// Bitmap(int, int, int, PixelFormat, IntPtr). No copy is made: drawing into this Bitmap
+        /// writes straight through to <paramref name="scan0"/>, which is the whole point of the
+        /// overload - it is how a WriteableBitmap's back buffer gets rendered into with GDI+
+        /// calls. The caller owns that memory and must keep it alive at least as long as this
+        /// Bitmap.
+        /// </summary>
+        public Bitmap(int width, int height, int stride, PixelFormat format, IntPtr scan0)
+        {
+            if (scan0 == IntPtr.Zero)
+            {
+                throw new ArgumentException("Pixel buffer pointer must not be null.", nameof(scan0));
+            }
+            _createdFormat = format;
+            _mat = Mat.FromPixelData(height, width, ToMatType(format), scan0, stride);
+        }
+
+        /// <summary>
+        /// Maps a GDI+ pixel format onto the Mat element type that matches its memory layout.
+        /// </summary>
+        private static MatType ToMatType(PixelFormat format)
+        {
             switch (format)
             {
                 case PixelFormat.Format8bppIndexed:
-                    matType = MatType.CV_8UC1;
-                    break;
+                    return MatType.CV_8UC1;
                 case PixelFormat.Format16bppGrayScale:
-                    matType = MatType.CV_16UC1;
-                    break;
+                    return MatType.CV_16UC1;
                 case PixelFormat.Format24bppRgb:
-                    matType = MatType.CV_8UC3;
-                    break;
+                    return MatType.CV_8UC3;
                 case PixelFormat.Format32bppArgb:
                 case PixelFormat.Format32bppPArgb:
                 case PixelFormat.Format32bppRgb:
-                    matType = MatType.CV_8UC4;
-                    break;
+                    return MatType.CV_8UC4;
                 case PixelFormat.Format48bppRgb:
-                    matType = MatType.CV_16UC3;
-                    break;
+                    return MatType.CV_16UC3;
                 case PixelFormat.Format16bppRgb565:
-                    matType = MatType.CV_16UC1; // Store as 16-bit single channel
-                    break;
+                    return MatType.CV_16UC1; // Store as 16-bit single channel
                 default:
                     // Fail loudly rather than silently guessing an element size the caller's
                     // pixel math will not match (the LockBits stride/layout corruption class).
                     throw new NotSupportedException($"Bitmap creation with pixel format {format} is not supported.");
             }
-            _createdFormat = format;
-            _mat = new Mat(height, width, matType);
-            // Initialize to zero
-            _mat.SetTo(OpenCvSharp.Scalar.All(0));
         }
 
         public Bitmap(string filename)
@@ -131,6 +174,53 @@ namespace System.Drawing
             var clone = new Bitmap(_mat?.Clone());
             clone._createdFormat = _createdFormat;
             return clone;
+        }
+
+        /// <summary>
+        /// Rotates and/or flips this bitmap in place, mirroring Bitmap.RotateFlip.
+        /// The 90/270 degree cases swap width and height, so the backing Mat is replaced.
+        /// </summary>
+        public void RotateFlip(RotateFlipType rotateFlipType)
+        {
+            if (_mat == null || _mat.Empty()) return;
+
+            // RotateFlipType packs a rotation in the low two bits and a flip in the next bit.
+            int rotation = ((int)rotateFlipType) & 0x3;
+            bool flipX = (((int)rotateFlipType) & 0x4) != 0;
+
+            Mat result = _mat;
+            bool resultCreated = false;
+
+            if (rotation != 0)
+            {
+                var rotateCode = rotation switch
+                {
+                    1 => RotateFlags.Rotate90Clockwise,
+                    2 => RotateFlags.Rotate180,
+                    _ => RotateFlags.Rotate90Counterclockwise
+                };
+                result = new Mat();
+                Cv2.Rotate(_mat, result, rotateCode);
+                resultCreated = true;
+            }
+
+            if (flipX)
+            {
+                var flipped = new Mat();
+                Cv2.Flip(result, flipped, FlipMode.Y);
+                if (resultCreated)
+                {
+                    result.Dispose();
+                }
+                result = flipped;
+                resultCreated = true;
+            }
+
+            if (resultCreated)
+            {
+                _mat.Dispose();
+                _mat = result;
+            }
         }
 
         // Getter-only overrides: the dimensions always come from the Mat, also when read

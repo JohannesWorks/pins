@@ -8,8 +8,10 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Runtime.Serialization;
 using System.Windows.Media;
+using System.Xml.Linq;
 
 namespace NINA.Test.ProfileTest {
 
@@ -303,6 +305,74 @@ namespace NINA.Test.ProfileTest {
 
             settings.ColorSchema.Name.Should().Be("Custom");
             settings.ColorSchema.PrimaryColor.Should().Be(originalPrimary);
+        }
+
+        [Test]
+        public void FramingAssistantSettings_ProjectionModeAndHorizon_RoundTripWithCompatibleDefaults() {
+            FramingAssistantSettings defaults = new FramingAssistantSettings();
+            FramingAssistantSettings settings = new FramingAssistantSettings {
+                SkyMapProjectionMode = SkyMapProjectionMode.AltAz,
+                ShowHorizon = true
+            };
+
+            FramingAssistantSettings roundTripped = RoundTrip(settings);
+
+            defaults.SkyMapProjectionMode.Should().Be(SkyMapProjectionMode.Equatorial);
+            defaults.ShowHorizon.Should().BeFalse();
+            roundTripped.SkyMapProjectionMode.Should().Be(SkyMapProjectionMode.AltAz);
+            roundTripped.ShowHorizon.Should().BeTrue();
+        }
+
+        [Test]
+        public void GuiderSettings_PHD2StarMetricVisibility_RoundTripsWithCompatibleDefaults() {
+            GuiderSettings defaults = new GuiderSettings();
+            GuiderSettings settings = new GuiderSettings {
+                PHD2GuideChartShowStarMass = true,
+                PHD2GuideChartShowSNR = true
+            };
+
+            GuiderSettings roundTripped = RoundTrip(settings);
+
+            defaults.PHD2GuideChartShowStarMass.Should().BeFalse();
+            defaults.PHD2GuideChartShowSNR.Should().BeFalse();
+            roundTripped.PHD2GuideChartShowStarMass.Should().BeTrue();
+            roundTripped.PHD2GuideChartShowSNR.Should().BeTrue();
+        }
+
+        [Test]
+        public void GuiderSettings_MountDitherMinimumPixels_RoundTripsWithCompatibleDefault() {
+            GuiderSettings defaults = new GuiderSettings();
+            GuiderSettings settings = new GuiderSettings {
+                MountDitherMinimumPixels = 2.5
+            };
+
+            GuiderSettings roundTripped = RoundTrip(settings);
+
+            defaults.MountDitherMinimumPixels.Should().Be(0.0);
+            roundTripped.MountDitherMinimumPixels.Should().Be(2.5);
+        }
+
+        [Test]
+        public void GuiderSettings_MissingMountDitherMinimumPixels_UsesCompatibleDefault() {
+            GuiderSettings settings = new GuiderSettings {
+                MountDitherMinimumPixels = 2.5
+            };
+            DataContractSerializer serializer = new DataContractSerializer(typeof(GuiderSettings));
+            using MemoryStream stream = new MemoryStream();
+            serializer.WriteObject(stream, settings);
+            stream.Position = 0;
+
+            XDocument document = XDocument.Load(stream);
+            document.Descendants()
+                .Single(element => element.Name.LocalName == nameof(GuiderSettings.MountDitherMinimumPixels))
+                .Remove();
+            stream.SetLength(0);
+            document.Save(stream);
+            stream.Position = 0;
+
+            GuiderSettings deserialized = (GuiderSettings)serializer.ReadObject(stream);
+
+            deserialized.MountDitherMinimumPixels.Should().Be(0.0);
         }
 
         private static List<string> CapturePropertyChanges(INotifyPropertyChanged source) {
