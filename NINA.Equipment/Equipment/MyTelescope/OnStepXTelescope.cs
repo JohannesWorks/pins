@@ -103,6 +103,12 @@ namespace NINA.Equipment.Equipment.MyTelescope {
 
         private static readonly TimeSpan MotionStartTimeout = TimeSpan.FromSeconds(10);
 
+        /// <summary>
+        /// How far from the target a finished goto may end before it counts as stopped on the way: well above the 1 s
+        /// resolution of :GR# and the refraction near the horizon.
+        /// </summary>
+        private const double GotoArrivalToleranceDegrees = 1.0;
+
         /// <summary>For a firmware without the homing flag: how long the mount stands still before homing counts as done.</summary>
         private static readonly TimeSpan HomeStandstillTimeout = TimeSpan.FromSeconds(3);
         private static readonly TimeSpan MotionTimeout = TimeSpan.FromMinutes(10);
@@ -1124,10 +1130,23 @@ namespace NINA.Equipment.Equipment.MyTelescope {
                 Logger.Warning("OnStepX: :hP# not acknowledged, checking the park state");
             }
 
-            // the slew to the park position shows as parking ('I') or a slew; a mount already there parks at once
+            // the slew to the park position shows as parking ('I') or a slew; a mount already there parks at once.
+            // Park::request sets parking before it answers '1' (Park.cpp), and an aborted park goto (a limit, :Q# from
+            // another client) returns to unparked (Park::requestAborted), not to park failed
+            bool started = acknowledged;
+            var startDeadline = DateTime.UtcNow + MotionStartTimeout;
             State? outcome;
             try {
-                outcome = await WaitFor(s => s.Status.Park is OnStepXParkState.Parked or OnStepXParkState.ParkFailed, MotionTimeout, token);
+                outcome = await WaitFor(s => {
+                    started |= s.Status.Park == OnStepXParkState.Parking || s.Status.Slewing;
+                    if (s.Status.Park is OnStepXParkState.Parked or OnStepXParkState.ParkFailed) {
+                        return true;
+                    }
+
+                    return s.Status.Park == OnStepXParkState.Unparked
+                        && !s.Status.Slewing
+                        && (started || DateTime.UtcNow >= startDeadline);
+                }, MotionTimeout, token);
             } catch (OperationCanceledException) {
                 AbortQuietly();
                 throw;
@@ -1139,6 +1158,11 @@ namespace NINA.Equipment.Equipment.MyTelescope {
             }
             if (outcome.Status.Park == OnStepXParkState.ParkFailed) {
                 throw Failure($"the mount reports that parking failed ({outcome.Status.Raw})");
+            }
+            if (outcome.Status.Park == OnStepXParkState.Unparked) {
+                throw Failure(started
+                    ? $"the park was aborted on the way, the mount is unparked ({outcome.Status.Raw})"
+                    : $"parking did not start within {MotionStartTimeout.TotalSeconds:F0} s ({outcome.Status.Raw})");
             }
         }
 
@@ -1357,8 +1381,8 @@ namespace NINA.Equipment.Equipment.MyTelescope {
         }
 
         /// <summary>
-        /// Throws when the goto cannot start, ends in a timeout or the connection is lost: TelescopeVM ignores the
-        /// result and would carry on as if the mount had arrived. A cancel stops the mount.
+        /// Throws when the goto cannot start, stops short of the target, ends in a timeout or the connection is lost:
+        /// TelescopeVM ignores the result and would carry on as if the mount had arrived. A cancel stops the mount.
         /// </summary>
         public async Task<bool> SlewToCoordinates(Coordinates coordinates, CancellationToken token) {
             if (!Connected) {
@@ -1399,6 +1423,15 @@ namespace NINA.Equipment.Equipment.MyTelescope {
                 }
                 if (stopped.Status.WaitingAtHome) {
                     throw Failure("the goto waits at home (OnStepX's pause at home on a meridian flip): continue it on the mount or turn that pause off");
+                }
+
+                // a goto stopped on the way by a limit, by :Q# from another client or by a second :MS# (Goto.cpp aborts
+                // the running goto) ends like an arrival in :GU#
+                var reached = new Coordinates(Angle.ByHours(stopped.RightAscension), Angle.ByDegree(stopped.Declination), Epoch.JNOW);
+                double offTarget = (reached - target).Distance.Degree;
+                if (offTarget > GotoArrivalToleranceDegrees) {
+                    string reason = stopped.Status.Error != OnStepXError.None ? $", controller error {stopped.Status.Error}" : "";
+                    throw Failure($"the goto stopped {offTarget:F2}° from the target {target}{reason} ({stopped.Status.Raw})");
                 }
 
                 if (stopped.Status.Error != OnStepXError.None) {

@@ -13,6 +13,7 @@
 #endregion "copyright"
 
 using Moq;
+using NINA.Astrometry;
 using NINA.Core.Enum;
 using NINA.Equipment.Equipment.MyTelescope;
 using NINA.Equipment.SDK.TelescopeSDKs.OnStepXSDK;
@@ -105,6 +106,91 @@ namespace NINA.Test.Equipment.OnStepX {
                 await Task.Delay(300);
             }
             telescope.Disconnect();
+        }
+
+        private static async Task<OnStepXTelescope> ConnectTelescope() {
+            var profile = new NINA.Profile.Profile();
+            profile.TelescopeSettings.SerialPort = PortName();
+            profile.TelescopeSettings.TimeSync = false;
+            profile.ApplicationSettings.DevicePollingInterval = 0.25;
+            var profileService = new Mock<IProfileService>();
+            profileService.SetupGet(p => p.ActiveProfile).Returns(profile);
+            var telescope = new OnStepXTelescope(profileService.Object);
+            Assert.That(await telescope.Connect(CancellationToken.None), Is.True);
+            return telescope;
+        }
+
+        /// <summary>
+        /// A goto stopped on the way (:Q#) must fail, a goto run to the end must arrive within the tolerance. Slews to
+        /// an hour west of the meridian at Dec +50° and back home.
+        /// </summary>
+        [Test]
+        public async Task Goto_StoppedOnTheWay_ThrowsAndAFullGotoArrives() {
+            using var telescope = await ConnectTelescope();
+            try {
+                Assert.That(telescope.SiderealTime, Is.Not.NaN);
+                var target = new Coordinates(Angle.ByHours(AstroUtil.EuclidianModulus(telescope.SiderealTime - 1, 24)), Angle.ByDegree(50), Epoch.JNOW);
+                TestContext.Out.WriteLine($"target {target}, LST {telescope.SiderealTime:F4} h");
+
+                var slew = telescope.SlewToCoordinates(target, CancellationToken.None);
+                await Task.Delay(TimeSpan.FromSeconds(3));
+                Assert.That(slew.IsCompleted, Is.False, "the goto ended before the stop");
+                var clock = Stopwatch.StartNew();
+                telescope.StopSlew();
+                var stopped = Assert.ThrowsAsync<InvalidOperationException>(async () => await slew);
+                TestContext.Out.WriteLine($"stopped goto after {clock.ElapsedMilliseconds} ms: {stopped?.Message}");
+                Assert.That(stopped?.Message, Does.Contain("from the target"));
+
+                Assert.That(await telescope.SlewToCoordinates(target, CancellationToken.None), Is.True);
+                var reached = telescope.Coordinates;
+                TestContext.Out.WriteLine($"full goto reached {reached}, {(reached - target).Distance.ArcSeconds:F0}\" from the target");
+                Assert.That((reached - target).Distance.Degree, Is.LessThan(1));
+            } finally {
+                telescope.StopSlew();
+                telescope.TrackingEnabled = false;
+                await telescope.FindHome(CancellationToken.None);
+                telescope.Disconnect();
+            }
+        }
+
+        /// <summary>
+        /// A park stopped on the way (:Q#) returns the mount to unparked: Park must fail at once. Slews away from the park
+        /// position first, so the park has a way to go, and homes afterwards.
+        /// </summary>
+        [Test]
+        public async Task Park_AbortedOnTheWay_FailsAtOnce() {
+            using var telescope = await ConnectTelescope();
+            try {
+                if (telescope.AtPark) {
+                    await telescope.Unpark(CancellationToken.None);
+                }
+                Assert.That(telescope.SiderealTime, Is.Not.NaN);
+                var away = new Coordinates(Angle.ByHours(AstroUtil.EuclidianModulus(telescope.SiderealTime - 1, 24)), Angle.ByDegree(50), Epoch.JNOW);
+                Assert.That(await telescope.SlewToCoordinates(away, CancellationToken.None), Is.True);
+
+                var park = telescope.Park(CancellationToken.None);
+                await Task.Delay(TimeSpan.FromSeconds(3));
+                if (park.IsFaulted && park.Exception?.InnerException is InvalidOperationException refused) {
+                    Assert.Ignore($"the mount did not start parking: {refused.Message}");
+                }
+                Assert.That(park.IsCompleted, Is.False, "the park ended before the stop");
+
+                var clock = Stopwatch.StartNew();
+                telescope.StopSlew();
+                var aborted = Assert.ThrowsAsync<InvalidOperationException>(async () => await park);
+                TestContext.Out.WriteLine($"aborted park after {clock.ElapsedMilliseconds} ms: {aborted?.Message}");
+                Assert.That(aborted?.Message, Does.Contain("park was aborted"));
+                Assert.That(clock.Elapsed, Is.LessThan(TimeSpan.FromSeconds(20)));
+                Assert.That(telescope.AtPark, Is.False);
+            } finally {
+                telescope.StopSlew();
+                if (telescope.AtPark) {
+                    await telescope.Unpark(CancellationToken.None);
+                }
+                telescope.TrackingEnabled = false;
+                await telescope.FindHome(CancellationToken.None);
+                telescope.Disconnect();
+            }
         }
     }
 }

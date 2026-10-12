@@ -156,7 +156,7 @@ namespace NINA.Test.Equipment.OnStepX {
         [Test]
         public async Task MeridianFlip_EndingOnTheSameSide_IsNotASuccess() {
             // LST 22:43:54 (:GS#), target half an hour past the meridian: NINA expects pierEast ('T'); the mount stays 'W'
-            var (telescope, port) = await Connected(FakeOnStepXPort.Umi17S().On(":MS#", "0"));
+            var (telescope, port) = await Connected(FakeOnStepXPort.Umi17S().On(":MS#", "0").On(":GR#", "22:13:54#").On(":GD#", "+20*00:00#"));
             port.DefaultReply = "1";
             port.On(":GU#", "NpEW260#");
             var target = new Coordinates(Angle.ByHours(22 + 43 / 60.0 + 54 / 3600.0 - 0.5), Angle.ByDegree(20), Epoch.JNOW);
@@ -169,7 +169,7 @@ namespace NINA.Test.Equipment.OnStepX {
 
         [Test]
         public async Task MeridianFlip_EndingOnTheExpectedSide_Succeeds() {
-            var (telescope, port) = await Connected(FakeOnStepXPort.Umi17S().On(":MS#", "0"));
+            var (telescope, port) = await Connected(FakeOnStepXPort.Umi17S().On(":MS#", "0").On(":GR#", "22:13:54#").On(":GD#", "+20*00:00#"));
             port.DefaultReply = "1";
             port.On(":GU#", "NpEW260#", "NpET260#");
             var target = new Coordinates(Angle.ByHours(22 + 43 / 60.0 + 54 / 3600.0 - 0.5), Angle.ByDegree(20), Epoch.JNOW);
@@ -239,7 +239,9 @@ namespace NINA.Test.Equipment.OnStepX {
             var port = FakeOnStepXPort.Umi17S()
                 .On(":Sr05:00:00.0000#", "1")
                 .On(":Sd+20*00:00.000#", "1")
-                .On(":MS#", "0");
+                .On(":MS#", "0")
+                .On(":GR#", "05:00:00#")
+                .On(":GD#", "+20*00:00#");
             var (telescope, _) = await Connected(port);
             port.On(":GU#", Tracking, TrackingAndSlewing, TrackingAndSlewing, Tracking);
 
@@ -258,7 +260,9 @@ namespace NINA.Test.Equipment.OnStepX {
                 .On(":Te#", "1")
                 .On(":Sr05:00:00.0000#", "1")
                 .On(":Sd+20*00:00.000#", "1")
-                .On(":MS#", "1", "0");
+                .On(":MS#", "1", "0")
+                .On(":GR#", "05:00:00#")
+                .On(":GD#", "+20*00:00#");
             var (telescope, _) = await Connected(port);
             port.On(":GU#", Idle, Tracking);
 
@@ -338,12 +342,45 @@ namespace NINA.Test.Equipment.OnStepX {
         }
 
         [Test]
+        public async Task SlewToCoordinates_StoppedShortOfTheTarget_Throws() {
+            // a limit, :Q# from another client or a second :MS# ends the goto like an arrival in :GU# (Goto.cpp)
+            var port = FakeOnStepXPort.Umi17S()
+                .On(":Sr05:00:00.0000#", "1")
+                .On(":Sd+20*00:00.000#", "1")
+                .On(":MS#", "0")
+                .On(":GR#", "05:00:00#")
+                .On(":GD#", "+35*00:00#");
+            var (telescope, _) = await Connected(port);
+            port.On(":GU#", Tracking, TrackingAndSlewing, Tracking);
+
+            Assert.That(async () => await telescope.SlewToCoordinates(new Coordinates(Angle.ByHours(5), Angle.ByDegree(20), Epoch.JNOW), CancellationToken.None),
+                Throws.InvalidOperationException.With.Message.Contains("° from the target"));
+            Assert.That(telescope.TargetCoordinates, Is.Null);
+        }
+
+        [Test]
+        public async Task SlewToCoordinates_EndingWithinTheTolerance_Arrives() {
+            var port = FakeOnStepXPort.Umi17S()
+                .On(":Sr05:00:00.0000#", "1")
+                .On(":Sd+20*00:00.000#", "1")
+                .On(":MS#", "0")
+                .On(":GR#", "05:00:01#")
+                .On(":GD#", "+20*00:30#");
+            var (telescope, _) = await Connected(port);
+            port.On(":GU#", Tracking, TrackingAndSlewing, Tracking);
+
+            Assert.That(await telescope.SlewToCoordinates(new Coordinates(Angle.ByHours(5), Angle.ByDegree(20), Epoch.JNOW), CancellationToken.None), Is.True);
+        }
+
+        [Test]
         public async Task PulseGuide_RightAfterAGotoStarted_IsRefused() {
             // a pulse aborts a goto (Guide::validate), and the last status may predate :MS#
             var port = FakeOnStepXPort.Umi17S()
                 .On(":Sr05:00:00.0000#", "1")
                 .On(":Sd+20*00:00.000#", "1")
-                .On(":MS#", "0");
+                .On(":MS#", "0")
+                .On(":GR#", "05:00:00#")
+                .On(":GD#", "+20*00:00#");
             var (telescope, _) = await Connected(port);
             port.On(":GU#", Tracking);
             var slew = telescope.SlewToCoordinates(new Coordinates(Angle.ByHours(5), Angle.ByDegree(20), Epoch.JNOW), CancellationToken.None);
@@ -457,6 +494,51 @@ namespace NINA.Test.Equipment.OnStepX {
 
             Assert.That(async () => await telescope.Park(CancellationToken.None),
                 Throws.InvalidOperationException.With.Message.Contains("parking failed"));
+        }
+
+        [Test]
+        public async Task Park_AbortedOnTheWay_ThrowsInsteadOfWaiting() {
+            // an aborted park goto returns to unparked, not to park failed (Park::requestAborted)
+            var (telescope, port) = await Connected(FakeOnStepXPort.Umi17S());
+            port.On(":GU#", Tracking, "nIEW260#", "nIEW260#", Idle);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+
+            Assert.That(async () => await telescope.Park(CancellationToken.None),
+                Throws.InvalidOperationException.With.Message.Contains("park was aborted"));
+            Assert.That(clock.Elapsed, Is.LessThan(TimeSpan.FromSeconds(2)));
+        }
+
+        [Test]
+        public async Task Park_AcknowledgedThenUnparked_Throws() {
+            // Park::request sets parking before it answers '1', so unparked right after the answer is an abort too
+            var (telescope, port) = await Connected(FakeOnStepXPort.Umi17S());
+            port.On(":GU#", Tracking, Idle);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+
+            Assert.That(async () => await telescope.Park(CancellationToken.None),
+                Throws.InvalidOperationException.With.Message.Contains("park was aborted"));
+            Assert.That(clock.Elapsed, Is.LessThan(TimeSpan.FromSeconds(2)));
+        }
+
+        [Test]
+        public async Task Park_LostAcknowledgement_WaitsForTheParkToStart() {
+            var (telescope, port) = await Connected(FakeOnStepXPort.Umi17S().On(":hP#", (string?)null));
+            port.On(":GU#", Tracking, Tracking, "nIEW260#", "nNPEW260#");
+
+            await telescope.Park(CancellationToken.None);
+
+            Assert.That(telescope.AtPark, Is.True);
+        }
+
+        [Test]
+        public async Task Park_LostAcknowledgementAndNoMotion_Throws() {
+            var (telescope, port) = await Connected(FakeOnStepXPort.Umi17S().On(":hP#", (string?)null));
+            port.On(":GU#", Tracking);
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+
+            Assert.That(async () => await telescope.Park(CancellationToken.None),
+                Throws.InvalidOperationException.With.Message.Contains("parking did not start"));
+            Assert.That(clock.Elapsed, Is.GreaterThanOrEqualTo(TimeSpan.FromSeconds(9)));
         }
 
         [Test]
