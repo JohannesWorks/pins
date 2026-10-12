@@ -22,8 +22,8 @@ namespace NINA.Equipment.Utility {
     /// <summary>
     /// Which physical camera each camera slot (imaging, guide) has connected, so the other slot can't open it too.
     /// A camera is identified by what its SDK knows it by, not by its device Id: one ToupTek camera is listed under
-    /// several brands (ToupTek_usb-0547-157c-4-4, Omegon_usb-0547-157c-4-4, ...) and two identical ASI cameras
-    /// without an alias share an Id.
+    /// several brands (ToupTek_usb-0547-157c-4-4, Omegon_usb-0547-157c-4-4, ...), two identical ASI cameras
+    /// without an alias share an Id, and an Alpaca camera reached by a static IP has the Id of its slot's entry.
     /// </summary>
     public static class CameraClaims {
         private static readonly Dictionary<object, Claim> claims = [];
@@ -76,6 +76,13 @@ namespace NINA.Equipment.Utility {
 
                 case ASICamera asi:
                     return "ZWOptical:" + asi.CameraId;
+
+                // Discovered or by static IP: the same address is the same camera.
+                case AlpacaDirectCamera direct:
+                    return "Alpaca:" + direct.Endpoint;
+
+                case AscomCamera ascom when ascom.IsAlpacaDevice():
+                    return "Alpaca:" + ascom.AlpacaEndpoint;
             }
             return camera.Category + ":" + camera.Id;
         }

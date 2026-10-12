@@ -59,8 +59,8 @@ namespace NINA.WPF.Base.ViewModel.Equipment.Camera {
         /// <summary>pins: whether to look for libgphoto2 cameras (DSLRs) at all.</summary>
         protected virtual bool IncludeGPhotoCameras => true;
 
-        /// <summary>pins: whether a found device is offered in this list.</summary>
-        protected virtual bool Includes(IDevice device) => true;
+        /// <summary>pins: which Alpaca Direct ("Static IP") entry this list offers; each slot keeps its own address.</summary>
+        protected virtual string AlpacaDirectCameraId => AlpacaInteraction.AlpacaDirectCameraId;
 
         public override async Task GetEquipment() {
             await lockObj.WaitAsync();
@@ -268,7 +268,7 @@ namespace NINA.WPF.Base.ViewModel.Equipment.Camera {
                 /* Alpaca */
                 try {
                     var alpacaInteraction = new AlpacaInteraction(profileService);
-                    var alpacaCameras = await alpacaInteraction.GetCameras(exposureDataFactory, default);
+                    var alpacaCameras = await alpacaInteraction.GetCameras(exposureDataFactory, default, AlpacaDirectCameraId);
                     foreach (ICamera cam in alpacaCameras) {
                         devices.Add(cam);
                     }
@@ -297,7 +297,6 @@ namespace NINA.WPF.Base.ViewModel.Equipment.Camera {
                 //                devices.Add(new FileCamera(profileService, telescopeMediator, imageDataFactory, exposureDataFactory));
                 devices.Add(new SimpleSimulatorCamera(profileService, imageDataFactory, exposureDataFactory));
 
-                devices = devices.Where(Includes).ToList();
                 DetermineSelectedDevice(devices, profileService.ActiveProfile.CameraSettings.Id, profileService.ActiveProfile.CameraSettings.LastDeviceName);
 
             } finally {

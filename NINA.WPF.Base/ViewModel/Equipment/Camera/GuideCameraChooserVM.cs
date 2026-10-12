@@ -13,8 +13,8 @@
 #endregion "copyright"
 
 using NINA.Core.Utility;
-using NINA.Equipment.Interfaces;
 using NINA.Equipment.Interfaces.Mediator;
+using NINA.Equipment.Utility;
 using NINA.Image.Interfaces;
 using NINA.Profile;
 using System.Threading.Tasks;
@@ -40,16 +40,8 @@ namespace NINA.WPF.Base.ViewModel.Equipment.Camera {
         // DSLRs don't guide.
         protected override bool IncludeGPhotoCameras => false;
 
-        protected override bool Includes(IDevice device) => IsOffered(device);
-
-        /// <summary>The fixed Id of the Alpaca Direct ("Static IP") camera, which is internal to NINA.Equipment.</summary>
-        public const string AlpacaDirectCameraId = "01E42001-1A8B-44AA-AD7E-CE8F5250F1F4";
-
-        /// <summary>
-        /// Alpaca Direct has one fixed Id and keeps its address in one fixed plugin-settings entry,
-        /// so it can't be a second camera.
-        /// </summary>
-        public static bool IsOffered(IDevice device) => device.Id != AlpacaDirectCameraId;
+        // Its own Alpaca Direct entry, so the guide camera's address doesn't overwrite the imaging camera's.
+        protected override string AlpacaDirectCameraId => AlpacaInteraction.GuideAlpacaDirectCameraId;
 
         public override async Task GetEquipment() {
             Logger.Info("Scanning for guide cameras");

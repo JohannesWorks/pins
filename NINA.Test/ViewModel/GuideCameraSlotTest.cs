@@ -13,17 +13,19 @@
 #endregion "copyright"
 
 using Moq;
-using NINA.Equipment.Equipment;
 using NINA.Equipment.Equipment.MyCamera;
 using NINA.Equipment.Interfaces;
+using NINA.Equipment.Interfaces.Mediator;
 using NINA.Equipment.Interfaces.ViewModel;
 using NINA.Equipment.SDK.CameraSDKs.PlayerOneSDK;
 using NINA.Equipment.SDK.CameraSDKs.SVBonySDK;
+using NINA.Equipment.Utility;
 using NINA.Image.Interfaces;
 using NINA.Profile;
 using NINA.Profile.Interfaces;
 using NINA.WPF.Base.ViewModel.Equipment.Camera;
 using NUnit.Framework;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -87,18 +89,40 @@ namespace NINA.Test.ViewModel {
             Assert.That(providers.Select(p => p.GetType()), Is.EqualTo(new[] { typeof(PlayerOneProvider) }));
         }
 
-        [Test]
-        public void AlpacaDirect_IsNotOfferedAsGuideCamera() {
-            var alpacaDirect = new AlpacaDirectCamera(guide, exposureDataFactory);
-
-            Assert.That(alpacaDirect.Id, Is.EqualTo(GuideCameraChooserVM.AlpacaDirectCameraId));
-            Assert.That(GuideCameraChooserVM.IsOffered(alpacaDirect), Is.False);
+        private static string? AlpacaDirectIdOf(CameraChooserVM chooser) {
+            return (string?)typeof(CameraChooserVM)
+                .GetProperty("AlpacaDirectCameraId", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(chooser);
         }
 
         [Test]
-        public void OtherCameras_AndNoCamera_AreOffered() {
-            Assert.That(GuideCameraChooserVM.IsOffered(Mock.Of<ICamera>()), Is.True);
-            Assert.That(GuideCameraChooserVM.IsOffered(new DummyDevice("No camera")), Is.True);
+        public void EachSlot_OffersItsOwnAlpacaDirectEntry() {
+            var cameraProviders = Mock.Of<IEquipmentProviders<ICamera>>();
+            var imagingChooser = new CameraChooserVM(imaging, Mock.Of<ITelescopeMediator>(), exposureDataFactory, Mock.Of<IImageDataFactory>(), cameraProviders);
+            var guideChooser = new GuideCameraChooserVM(
+                guide,
+                Mock.Of<ITelescopeMediator>(),
+                exposureDataFactory,
+                Mock.Of<IImageDataFactory>(),
+                new GuideCameraEquipmentProviders(cameraProviders, guide, exposureDataFactory));
+
+            Assert.That(AlpacaDirectIdOf(imagingChooser), Is.EqualTo(AlpacaInteraction.AlpacaDirectCameraId));
+            Assert.That(AlpacaDirectIdOf(guideChooser), Is.EqualTo(AlpacaInteraction.GuideAlpacaDirectCameraId));
+        }
+
+        [Test]
+        public void TheGuideCamerasStaticIp_IsKeptApartFromTheImagingCameras() {
+            var imagingEntry = new AlpacaDirectCamera(imaging, exposureDataFactory);
+            var guideEntry = new AlpacaDirectCamera(guide, exposureDataFactory, AlpacaInteraction.GuideAlpacaDirectCameraId);
+
+            // Written the way Touch-N-Stars' alpaca-direct endpoint does: with the imaging profile service.
+            new PluginOptionsAccessor(imaging, Guid.Parse(AlpacaInteraction.AlpacaDirectCameraId)).SetValueString("IpAddress", "192.168.1.50");
+            new PluginOptionsAccessor(imaging, Guid.Parse(AlpacaInteraction.GuideAlpacaDirectCameraId)).SetValueString("IpAddress", "192.168.1.51");
+
+            Assert.That(imagingEntry.Id, Is.EqualTo(AlpacaInteraction.AlpacaDirectCameraId));
+            Assert.That(guideEntry.Id, Is.EqualTo(AlpacaInteraction.GuideAlpacaDirectCameraId));
+            Assert.That(imagingEntry.Endpoint, Does.StartWith("192.168.1.50:"));
+            Assert.That(guideEntry.Endpoint, Does.StartWith("192.168.1.51:"));
         }
     }
 }

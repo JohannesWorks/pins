@@ -12,14 +12,17 @@
 
 #endregion "copyright"
 
+using ASCOM.Alpaca.Discovery;
 using Moq;
 using NINA.Equipment.Equipment.MyCamera;
 using NINA.Equipment.Equipment.MyCamera.ToupTekAlike;
 using NINA.Equipment.Interfaces;
 using NINA.Equipment.Utility;
 using NINA.Image.Interfaces;
+using NINA.Profile;
 using NINA.Profile.Interfaces;
 using NUnit.Framework;
+using System;
 using ProfileModel = NINA.Profile.Profile;
 
 namespace NINA.Test.Equipment.Camera {
@@ -64,6 +67,26 @@ namespace NINA.Test.Equipment.Camera {
                 model = new ToupTekAlikeModel { xpixsz = 2.9f, ypixsz = 2.9f }
             };
             return new ToupTekAlikeCamera(info, sdk.Object, profileService, Mock.Of<IExposureDataFactory>());
+        }
+
+        private AlpacaDirectCamera AlpacaDirect(string id, string ipAddress, int port = 11111, int deviceNumber = 0) {
+            var settings = new PluginOptionsAccessor(profileService, Guid.Parse(id));
+            settings.SetValueString("IpAddress", ipAddress);
+            settings.SetValueInt32("Port", port);
+            settings.SetValueInt32("DeviceNumber", deviceNumber);
+            return new AlpacaDirectCamera(profileService, Mock.Of<IExposureDataFactory>(), id);
+        }
+
+        private AscomCamera DiscoveredAlpaca(string uniqueId, string ipAddress, int port = 11111, int deviceNumber = 0) {
+            var meta = new AscomDevice {
+                UniqueId = uniqueId,
+                AscomDeviceName = "ZWO ASI Air",
+                HostName = ipAddress,
+                IpAddress = ipAddress,
+                IpPort = port,
+                AlpacaDeviceNumber = deviceNumber
+            };
+            return new AscomCamera(meta, profileService, Mock.Of<IExposureDataFactory>());
         }
 
         private static ICamera Camera(string category, string id) {
@@ -146,6 +169,49 @@ namespace NINA.Test.Equipment.Camera {
 
             Assert.That(CameraClaims.TryClaim(imagingSlot, Imaging, imagingSimulator, out _), Is.True);
             Assert.That(CameraClaims.TryClaim(guideSlot, Guide, guideSimulator, out _), Is.True);
+        }
+
+        [Test]
+        public void TwoAlpacaCamerasByStaticIp_AtDifferentAddresses_AreAllowed() {
+            var imaging = AlpacaDirect(AlpacaInteraction.AlpacaDirectCameraId, "192.168.1.50");
+            var guide = AlpacaDirect(AlpacaInteraction.GuideAlpacaDirectCameraId, "192.168.1.51");
+
+            Assert.That(CameraClaims.TryClaim(imagingSlot, Imaging, imaging, out _), Is.True);
+            Assert.That(CameraClaims.TryClaim(guideSlot, Guide, guide, out _), Is.True);
+        }
+
+        [Test]
+        public void TheSameAddress_InBothStaticIpEntries_IsRefused() {
+            var imaging = AlpacaDirect(AlpacaInteraction.AlpacaDirectCameraId, "192.168.1.50");
+            var guide = AlpacaDirect(AlpacaInteraction.GuideAlpacaDirectCameraId, " 192.168.1.50 ");
+            Assert.That(imaging.Id, Is.Not.EqualTo(guide.Id), "the device Ids differ, the camera doesn't");
+
+            Assert.That(CameraClaims.TryClaim(imagingSlot, Imaging, imaging, out _), Is.True);
+            Assert.That(CameraClaims.TryClaim(guideSlot, Guide, guide, out var refusal), Is.False);
+            Assert.That(refusal, Does.Contain(Imaging));
+        }
+
+        [Test]
+        public void TwoDevicesOfOneAlpacaServer_AreAllowed() {
+            var imaging = AlpacaDirect(AlpacaInteraction.AlpacaDirectCameraId, "192.168.1.50", deviceNumber: 0);
+            var guide = AlpacaDirect(AlpacaInteraction.GuideAlpacaDirectCameraId, "192.168.1.50", deviceNumber: 1);
+
+            Assert.That(CameraClaims.TryClaim(imagingSlot, Imaging, imaging, out _), Is.True);
+            Assert.That(CameraClaims.TryClaim(guideSlot, Guide, guide, out _), Is.True);
+        }
+
+        [Test]
+        public void ADiscoveredAlpacaCamera_AndTheSameOneByStaticIp_AreRefused() {
+            Assert.That(CameraClaims.TryClaim(imagingSlot, Imaging, DiscoveredAlpaca("unique-1", "192.168.1.50"), out _), Is.True);
+
+            var guide = AlpacaDirect(AlpacaInteraction.GuideAlpacaDirectCameraId, "192.168.1.50");
+            Assert.That(CameraClaims.TryClaim(guideSlot, Guide, guide, out _), Is.False);
+        }
+
+        [Test]
+        public void TwoDiscoveredAlpacaCameras_WithOneUniqueId_AreAllowedAtDifferentAddresses() {
+            Assert.That(CameraClaims.TryClaim(imagingSlot, Imaging, DiscoveredAlpaca("same-id", "192.168.1.50"), out _), Is.True);
+            Assert.That(CameraClaims.TryClaim(guideSlot, Guide, DiscoveredAlpaca("same-id", "192.168.1.51"), out _), Is.True);
         }
 
         [Test]
