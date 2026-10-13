@@ -28,15 +28,11 @@ public sealed partial class Guider
     {
         storedBacklash = state;
         var s = settings.Backlash;
-        if (corrector.Backlash is BacklashCompensation fixedPulse)
-        {
-            fixedPulse.SetPulseWidth(BacklashPulse(s), s.FloorMs, BacklashCeiling(s));
-        }
-
+        corrector.Backlash.SetPulseWidth(BacklashPulse(s), s.FloorMs, BacklashCeiling(s));
         BacklashPulseInUse();
     });
 
-    private BacklashCompensation CreateFixedBacklash(BacklashSettings s, PulseLimiter limiter)
+    private BacklashCompensation CreateBacklash(BacklashSettings s, PulseLimiter limiter)
     {
         var backlash = new BacklashCompensation(BacklashPulse(s), s.FloorMs, BacklashCeiling(s), s.Enabled, limiter);
         backlashPulseSeen = backlash.PulseWidthMs;
@@ -69,16 +65,10 @@ public sealed partial class Guider
         Emit(new BacklashPulseLearnedEvent(now, storedBacklash));
     }
 
-    // publishes the pulse in use; returns it when it changed since the last call. Only the fixed compensation learns a pulse:
-    // the play model's pulse follows the gear from step to step and is kept by the play model itself
+    // publishes the pulse in use; returns it when it changed since the last call
     private int? BacklashPulseInUse()
     {
-        if (corrector.Backlash is not BacklashCompensation b)
-        {
-            backlashPulseMs = 0;
-            return null;
-        }
-
+        var b = corrector.Backlash;
         backlashPulseMs = b.IsEnabled ? b.PulseWidthMs : 0;
         if (b.PulseWidthMs == backlashPulseSeen)
         {

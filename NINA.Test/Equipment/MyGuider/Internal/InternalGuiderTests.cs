@@ -397,20 +397,6 @@ public class InternalGuiderOptionsTests
     }
 
     [Test]
-    public void Backlash_model_is_fixed_by_default_and_the_play_model_reaches_the_engine()
-    {
-        var (o, _) = Create();
-        o.ToEngineSettings().Backlash.Model.Should().Be(BacklashModel.Fixed, "the default stays PHD2's fixed pulse");
-        var d = o.Describe().Single(x => x.Name == "BacklashModel");
-        d.Options.Should().Equal("Fixed", "PlayModel");
-        d.DependsOn.Should().Be("BacklashCompensation");
-        d.Description.Should().Contain("Predictive");
-
-        o.TrySet("BacklashModel", "PlayModel", out _).Should().BeTrue();
-        o.ToEngineSettings().Backlash.Model.Should().Be(BacklashModel.PlayModel);
-    }
-
-    [Test]
     public void Describe_lists_all_settings_with_basic_flags()
     {
         var (o, _) = Create();
