@@ -21,7 +21,7 @@ public sealed record BacklashEvent(IReadOnlyList<(long TimeSeconds, double Miss)
 /// raw Dec offset before the algorithm runs, then <see cref="Apply"/> with the algorithm's Dec
 /// distance and the requested pulse duration.
 /// </remarks>
-public sealed class BacklashCompensation
+public sealed class BacklashCompensation : IBacklashCompensation
 {
     /// <summary>Minimum pulse (ms); small enough to effectively disable BLC.</summary>
     public const int MinCompAmount = 20;

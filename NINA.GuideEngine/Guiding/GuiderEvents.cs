@@ -309,6 +309,19 @@ public sealed record PulseModelUpdatedEvent(DateTimeOffset Timestamp, PulseModel
     public override string Phd2Name => "PulseModelUpdated";
 }
 
+/// <summary>
+/// The Dec backlash play model learned (a calibration measured the shape of the play, or a reversal's take-up was
+/// measured). The host stores <see cref="State"/> for the next session (<see cref="Guider.RestoreBacklashPlayModel"/>).
+/// Not part of PHD2's event set.
+/// </summary>
+/// <param name="InUse">
+/// True when the settings use the play model; while they don't, it learns only from calibrations (the shape of the play).
+/// </param>
+public sealed record BacklashPlayModelLearnedEvent(DateTimeOffset Timestamp, PlayModelState State, PlayModelValues Values, bool InUse) : GuiderEvent(Timestamp)
+{
+    public override string Phd2Name => "BacklashPlayModelLearned";
+}
+
 /// <summary>A processed frame is available (for the live view). Not part of PHD2's event set.</summary>
 public sealed record FrameReadyEvent(DateTimeOffset Timestamp, GuideFrame Frame, IReadOnlyList<StarInfo> Stars, GuidePoint LockPosition) : GuiderEvent(Timestamp)
 {

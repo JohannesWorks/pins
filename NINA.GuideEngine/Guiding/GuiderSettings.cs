@@ -22,6 +22,13 @@ public sealed record BacklashSettings
 
     /// <summary>0 = automatic (1.5 × pulse).</summary>
     public int CeilingMs { get; init; }
+
+    /// <summary>
+    /// Fixed: PHD2's pulse at every reversal. PlayModel: the gear's play is tracked, reversals the offset does not need
+    /// are held back, and a reversal takes up the play that is left (<see cref="PlayModelBacklash"/>); <see cref="PulseMs"/>
+    /// is then only its first guess of the play.
+    /// </summary>
+    public BacklashModel Model { get; init; } = BacklashModel.Fixed;
 }
 
 /// <summary>All guider settings. Immutable; apply changes with <see cref="Guider.UpdateSettings"/>.</summary>

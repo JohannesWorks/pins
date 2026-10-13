@@ -892,6 +892,8 @@ public sealed partial class Guider : IAsyncDisposable
             {
                 coachPulsesDropped = IsCoachMeasuring;
                 pulseModel.Interrupt(mountMoved: true);
+
+                PlayModelPulsesNotSent();
                 return;
             }
 
@@ -912,6 +914,7 @@ public sealed partial class Guider : IAsyncDisposable
             else
             {
                 pulseModel.Interrupt(mountMoved: false);
+                PlayModelPulsesNotSent();
             }
         }
     }
@@ -1201,8 +1204,10 @@ public sealed partial class Guider : IAsyncDisposable
 
             Emit(new CalibrationCompleteEvent(now, MountName, result));
             Emit(new CalibrationUpdatedEvent(now, result, settings.DecFlipRequired));
+            PlayModelCalibrated(result, now);
             var adj = AdjustCalibration(result, snapshot);
             EnterGuiding(starPosition.IsValid ? starPosition : lastStarPosition, adj, now);
+            PlayModelAfterCalibration(result);
             return [];
         }
 
@@ -1481,7 +1486,7 @@ public sealed partial class Guider : IAsyncDisposable
                 }
 
                 pulses = corrPulses;
-                pendingCorrection = AxisCorrector.CorrectionOf(corrPulses, rates.X, rates.Y, corr.BacklashCompMs);
+                pendingCorrection = corrector.CorrectionOf(corr, corrPulses, rates.X, rates.Y);
                 stats.Add(GuideStepSample.FromCorrection(corr, now, r.Primary.Snr, r.StarsUsed, excluded: settle.IsActive || recenterMove));
                 lastStats = stats.GetSnapshot(now);
                 if (!settle.IsActive && !recenterMove)
@@ -1491,6 +1496,7 @@ public sealed partial class Guider : IAsyncDisposable
             }
 
             EmitAlgorithmNotes(now);
+            EmitPlayModelLearned(now);
 
             // the pulses as sent: a recenter pulse is clamped to the max pulse after the corrector computed it
             int raSentMs = pulses.Where(p => p.Direction.Axis() == GuideAxis.Ra).Sum(p => p.DurationMs);
@@ -1962,7 +1968,7 @@ public sealed partial class Guider : IAsyncDisposable
         var limiter = new PulseLimiter();
         limiter.SetMaxRaDuration(s.MaxRaDurationMs);
         limiter.SetMaxDecDuration(s.MaxDecDurationMs);
-        var backlash = new BacklashCompensation(s.Backlash.PulseMs, s.Backlash.FloorMs, s.Backlash.CeilingMs, s.Backlash.Enabled, limiter);
+        var backlash = CreateBacklash(s, limiter);
         var newCorrector = new AxisCorrector(ra, dec, limiter, backlash)
         {
             DecGuideMode = s.DecGuideMode,

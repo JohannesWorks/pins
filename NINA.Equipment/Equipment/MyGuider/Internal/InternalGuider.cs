@@ -97,6 +97,7 @@ public sealed class InternalGuider : BaseINPC, IAdvancedGuider, IGuidingCoach, I
     private readonly IncidentStore incidents;
     private readonly string periodicErrorStorePath;
     private readonly string pulseModelStorePath;
+    private readonly string playModelStorePath;
 
     private Guider? guider;
     private GuidingCoach? coach;
@@ -147,12 +148,17 @@ public sealed class InternalGuider : BaseINPC, IAdvancedGuider, IGuidingCoach, I
     /// <param name="incidentDirectory">Where incidents are stored (tests use a temp folder).</param>
     /// <param name="periodicErrorStorePath">Where the learned periodic errors are stored (tests use a temp file).</param>
     /// <param name="pulseModelStorePath">Where the learned pulse models are stored (tests use a temp file).</param>
+    /// <param name="playModelStorePath">
+    /// Where the learned Dec backlash play models are stored (tests use a temp file); by default next to the pulse model store.
+    /// </param>
     internal InternalGuider(IProfileService profileService, ITelescopeMediator telescopeMediator, IGuideCameraMediator guideCameraMediator,
-        string incidentDirectory, string? periodicErrorStorePath = null, string? pulseModelStorePath = null)
+        string incidentDirectory, string? periodicErrorStorePath = null, string? pulseModelStorePath = null, string? playModelStorePath = null)
     {
         this.profileService = profileService;
         this.periodicErrorStorePath = periodicErrorStorePath ?? DefaultPeriodicErrorStorePath;
         this.pulseModelStorePath = pulseModelStorePath ?? DefaultPulseModelStorePath;
+        this.playModelStorePath = playModelStorePath
+            ?? (pulseModelStorePath is not null ? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(pulseModelStorePath))!, PlayModelStoreFileName) : DefaultPlayModelStorePath);
         this.telescopeMediator = telescopeMediator;
         this.guideCameraMediator = guideCameraMediator;
         options = new InternalGuiderOptions(profileService, InternalGuiderOptions.SettingsId);
@@ -168,6 +174,7 @@ public sealed class InternalGuider : BaseINPC, IAdvancedGuider, IGuidingCoach, I
             ApplySettingsIfConnected();
             RestoreStoredPeriodicError();
             RestoreStoredPulseModel();
+            RestoreStoredPlayModel();
             incidents.Options = IncidentStoreOptionsNow();
         };
     }
@@ -416,6 +423,7 @@ public sealed class InternalGuider : BaseINPC, IAdvancedGuider, IGuidingCoach, I
 
         RestoreStoredPeriodicError();
         RestoreStoredPulseModel();
+        RestoreStoredPlayModel();
 
         if (options.SaveGuideLog)
         {
@@ -738,9 +746,24 @@ public sealed class InternalGuider : BaseINPC, IAdvancedGuider, IGuidingCoach, I
                 RaAlgorithmState = ToDto(g?.RaAlgorithm, PixelScale),
                 DecAlgorithmState = ToDto(g?.DecAlgorithm, PixelScale),
                 DecDrift = ToDecDriftDto(decDirection, PixelScale),
+                DecBacklash = ToDto(g?.BacklashPlayModelStatus),
             };
         }
     }
+
+    private static AdvancedDecBacklashState? ToDto(PlayModelValues? v) => v is null ? null : new AdvancedDecBacklashState
+    {
+        FullReversalMs = Math.Round(v.FullReversalMs),
+        SlackNorthMs = double.IsFinite(v.SlackNorthMs) ? Math.Round(v.SlackNorthMs) : null,
+        SlackSouthMs = double.IsFinite(v.SlackSouthMs) ? Math.Round(v.SlackSouthMs) : null,
+        Gear = v.Engaged?.ToString() ?? (v.StateKnown ? "Floating" : "Unknown"),
+        Shape = v.Shape,
+        ShapeFromCalibration = v.ShapeFromCalibration,
+        Reversals = v.Reversals,
+        HeldCorrections = v.HeldMoves,
+        LearnedTakeUps = Math.Round(v.LearnedWindows, 1),
+        LastCompensationMs = v.LastCompensationMs,
+    };
 
     private static AdvancedGuideTiming? ToDto(GuideTiming? timing) => timing is null ? null : new AdvancedGuideTiming
     {
@@ -1521,6 +1544,14 @@ public sealed class InternalGuider : BaseINPC, IAdvancedGuider, IGuidingCoach, I
                 case PulseModelUpdatedEvent pu:
                     Logger.Info($"InternalGuider: {GuideLogBridge.PulseModelText(pu)}");
                     break;
+                case BacklashPlayModelLearnedEvent bp:
+                    PersistPlayModel(bp.State);
+                    if (bp.InUse)
+                    {
+                        Logger.Info($"InternalGuider: {GuideLogBridge.PlayModelText(bp.Values)}");
+                    }
+
+                    break;
                 case SettleBeginEvent:
                     settleStatus = "Settling";
                     Report("Settling");
@@ -2060,6 +2091,60 @@ public sealed class InternalGuider : BaseINPC, IAdvancedGuider, IGuidingCoach, I
         catch (Exception ex)
         {
             Logger.Warning($"InternalGuider: could not save the pulse model: {ex.Message}");
+        }
+    }
+
+    private const string PlayModelStoreFileName = "backlash-play-model.json";
+
+    private static string DefaultPlayModelStorePath => Path.Combine(StorageDirectory, PlayModelStoreFileName);
+
+    private PlayModelStore LoadPlayModelStore()
+    {
+        try
+        {
+            if (File.Exists(playModelStorePath))
+            {
+                return PlayModelStore.FromJson(File.ReadAllText(playModelStorePath));
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning($"InternalGuider: could not read the backlash play model store: {ex.Message}");
+        }
+
+        return new PlayModelStore();
+    }
+
+    // the Dec gear belongs to the mount: stored per profile and mount like the pulse model
+    private void RestoreStoredPlayModel()
+    {
+        try
+        {
+            if (guider is { } g && LoadPlayModelStore().Get(PulseModelKeyNow()) is { } state)
+            {
+                g.RestoreBacklashPlayModel(state);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning($"InternalGuider: could not restore the backlash play model: {ex.Message}");
+        }
+    }
+
+    private void PersistPlayModel(PlayModelState state)
+    {
+        try
+        {
+            var store = LoadPlayModelStore();
+            store.Set(PulseModelKeyNow(), state);
+            Directory.CreateDirectory(Path.GetDirectoryName(playModelStorePath)!);
+            var tmp = playModelStorePath + ".tmp";
+            File.WriteAllText(tmp, store.ToJson());
+            File.Move(tmp, playModelStorePath, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning($"InternalGuider: could not save the backlash play model: {ex.Message}");
         }
     }
 
