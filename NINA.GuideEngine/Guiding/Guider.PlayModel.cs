@@ -44,7 +44,8 @@ public sealed partial class Guider
     {
         if (!UsesPlayModel(s))
         {
-            return new BacklashCompensation(s.Backlash.PulseMs, s.Backlash.FloorMs, s.Backlash.CeilingMs, s.Backlash.Enabled, limiter);
+            // the fixed compensation, with the pulse it learned before (Guider.Backlash.cs)
+            return CreateFixedBacklash(s.Backlash, limiter);
         }
 
         playBacklash.Limiter = limiter;

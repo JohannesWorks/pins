@@ -1414,6 +1414,7 @@ public sealed partial class Guider : IAsyncDisposable
                 {
                     PrepareAlgorithms(settle.IsActive, snapshot, sigma);
                     corr = corrector.GuideStep(mountOfs.X, mountOfs.Y, rates.X, rates.Y, now);
+                    BacklashStepDone(now);
                 }
             }
             else

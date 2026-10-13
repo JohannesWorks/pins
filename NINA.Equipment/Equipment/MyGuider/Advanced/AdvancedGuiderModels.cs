@@ -187,6 +187,12 @@ namespace NINA.Equipment.Equipment.MyGuider.Advanced {
         /// <summary>The direction Dec guides in and the drift it follows, in Dec guide mode Drift; null in the other Dec guide modes.</summary>
         public AdvancedDecDriftState? DecDrift { get; set; }
 
+        /// <summary>
+        /// The Dec backlash compensation pulse in use (ms): the setting, or what the adaptive compensation learned from it.
+        /// Null while the compensation is off or the guider isn't connected.
+        /// </summary>
+        public int? DecBacklashPulseMs { get; set; }
+
         /// <summary>What the Dec backlash play model knows, while it compensates (Dec backlash model PlayModel); null otherwise.</summary>
         public AdvancedDecBacklashState? DecBacklash { get; set; }
     }
