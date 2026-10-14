@@ -20,10 +20,21 @@ public class ToolsCatalogTests {
         "list_target_templates",
         "get_job",
         "list_jobs",
+        "get_guider_report",
+        "get_guiding_coach_report",
+        "list_guide_incidents",
+        "get_guide_incident",
+        "read_log",
+        "plan_targets",
+        "find_targets",
+        "get_session_summary",
+        "get_system_health",
+        "get_events",
         "stop_all",
         "cancel_job",
         "stop_sequence",
         "stop_guiding",
+        "secure_observatory",
         "connect_device",
         "disconnect_device",
         "slew_mount",
@@ -39,6 +50,11 @@ public class ToolsCatalogTests {
         "change_filter",
         "start_guiding",
         "set_switch",
+        "plate_solve",
+        "center_target",
+        "move_rotator",
+        "control_flat_device",
+        "control_dome",
         "load_sequence",
         "add_target",
         "clear_targets",
@@ -54,7 +70,17 @@ public class ToolsCatalogTests {
         "list_saved_sequences",
         "list_target_templates",
         "get_job",
-        "list_jobs"
+        "list_jobs",
+        "get_guider_report",
+        "get_guiding_coach_report",
+        "list_guide_incidents",
+        "get_guide_incident",
+        "read_log",
+        "plan_targets",
+        "find_targets",
+        "get_session_summary",
+        "get_system_health",
+        "get_events"
     ];
 
     private static readonly string[] StopTools = ["stop_all", "cancel_job", "stop_sequence", "stop_guiding"];
@@ -78,7 +104,13 @@ public class ToolsCatalogTests {
         "change_filter",
         "start_guiding",
         "stop_guiding",
-        "set_switch"
+        "set_switch",
+        "plate_solve",
+        "center_target",
+        "move_rotator",
+        "control_flat_device",
+        "control_dome",
+        "secure_observatory"
     ];
 
     private ToolsTestCatalog catalog = null!;
@@ -178,7 +210,7 @@ public class ToolsCatalogTests {
     [TestCaseSource(nameof(AllToolNames))]
     public void Tool_JobToolsHaveWaitSeconds(string name) {
         var properties = catalog.Tool(name).InputSchema["properties"]!.AsObject();
-        var expected = JobTools.Contains(name) || name is "get_job" or "cancel_job";
+        var expected = JobTools.Contains(name) || name is "get_job" or "cancel_job" or "get_events";
 
         Assert.That(properties.ContainsKey("wait_seconds"), Is.EqualTo(expected));
 
@@ -199,7 +231,7 @@ public class ToolsCatalogTests {
     [Test]
     public void Guards_MatchTheSpec() {
         string[] strict = ["load_sequence", "clear_targets", "start_sequence", "reset_sequence"];
-        string[] none = [.. QueryTools, "stop_all", "cancel_job", "stop_sequence", "save_sequence"];
+        string[] none = [.. QueryTools, "stop_all", "cancel_job", "stop_sequence", "save_sequence", "secure_observatory"];
 
         foreach (var tool in catalog.Tools.Cast<ObservatoryTool>()) {
             var expected = strict.Contains(tool.Name)
@@ -280,11 +312,17 @@ public class ToolsCatalogTests {
 
         foreach (var tool in catalog.Tools) {
             var properties = tool.InputSchema["properties"]!.AsObject().Select(property => property.Key).ToHashSet();
+            var enumValues = tool.InputSchema["properties"]!.AsObject()
+                .SelectMany(property => property.Value?["enum"] is JsonArray values
+                    ? values.Select(value => value!.GetValue<string>())
+                    : Enumerable.Empty<string>())
+                .ToHashSet();
             var mentioned = Regex.Matches(tool.Description, "\\b[a-z]+(?:_[a-z]+)+\\b").Select(match => match.Value).Distinct();
 
             foreach (var word in mentioned) {
                 var known = names.Contains(word)
                     || properties.Contains(word)
+                    || enumValues.Contains(word)
                     || DeviceKinds.All.Contains(word)
                     || word is "camera_cooler" or "wait_seconds" or "force_calibration" or "slew_and_center";
 
