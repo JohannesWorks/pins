@@ -139,3 +139,13 @@ or swallowed correction is still part of their state. So the play model is used 
 - Without dithers or real offsets, the play model on the logged mount guides about 0.01 px worse than no compensation
   (it does sometimes take up the play on a false alarm of the gate); the total over a night with dithers is better.
 - What is learned is stored per profile and mount (`backlash-play-model.json`); a calibration replaces the shape.
+- The Guiding Coach suggests the play model only where a fixed pulse clearly fails (`response.decBacklash`,
+  `GuidingCoach.BacklashSuggestion`): with the Predictive Dec algorithm, in Dec guide mode Auto, without a suggested
+  Drift mode, and when the play is soft (the large-move value at least 1.5 × the reversal value) or large (1 s or more).
+  The measured reversal value becomes the "Dec backlash pulse", the prior of the size (at most 8 s, the largest size);
+  a large play has no 3 s limit, since each pulse adds at most up to the max Dec pulse and the model keeps what is
+  left. A small hard play keeps the fixed pulse, although the simulator favours the play model there too (hard 600 ms
+  above): until the live test, the coach stays with what was proven on the mount; the setting can be chosen by hand.
+  The coach runs no trial of play model against fixed pulse: the model learns from take-ups (a memory of about 20) and gains
+  mostly around dithers, without which it guides slightly worse (no dither above), so a few minutes of trial would
+  judge it unfairly.
