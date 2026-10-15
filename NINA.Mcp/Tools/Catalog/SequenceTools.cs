@@ -18,7 +18,8 @@ internal sealed class GetSequenceTool : ObservatoryTool {
         "The sequence currently loaded in the advanced sequencer as a tree: each node has path (index path such as "
         + "\"1/0/2\"), name, type, status (Created, Running, Finished, Failed, Skipped, Disabled), details (e.g. target "
         + "coordinates, exposure time, filter, progress) and children. Also tells whether it is running. Use it to inspect "
-        + "a loaded sequence before start_sequence and to follow progress (which target and exposure block is active).";
+        + "a loaded sequence before start_sequence and to follow progress (which target and exposure block is active). notes "
+        + "flags targets that no meridian flip trigger covers.";
 
     public override ToolAnnotations Annotations => ToolAnnotations.Query;
 
@@ -28,8 +29,18 @@ internal sealed class GetSequenceTool : ObservatoryTool {
 
     protected override Task<ToolCallResult> ExecuteAsync(ToolArguments arguments, ToolContext context, CancellationToken cancellationToken) {
         var depth = arguments.GetInt("max_depth") ?? 4;
+        var note = SequenceChecks.MeridianFlipNote(Observatory.GetSequence(SequenceChecks.Depth));
+        var snapshot = Observatory.GetSequence(depth);
 
-        return Task.FromResult(ToolCallResult.Json(Observatory.GetSequence(depth)));
+        var payload = new {
+            snapshot.Initialized,
+            snapshot.Running,
+            snapshot.Name,
+            snapshot.Nodes,
+            notes = note is null ? null : new[] { note }
+        };
+
+        return Task.FromResult(ToolCallResult.Json(payload));
     }
 }
 
@@ -139,7 +150,7 @@ internal sealed class LoadSequenceTool : ObservatoryTool {
 
 internal sealed class AddTargetTool : ObservatoryTool {
 
-    private static readonly string[] PlanOnlyArguments = ["slew_and_center", "start_guiding", "autofocus_at_start", "dither_every"];
+    private static readonly string[] PlanOnlyArguments = ["slew_and_center", "start_guiding", "autofocus_at_start", "dither_every", "meridian_flip"];
 
     public AddTargetTool(IPinsObservatory observatory) : base(observatory) {
     }
@@ -155,7 +166,9 @@ internal sealed class AddTargetTool : ObservatoryTool {
         + "(2) 'exposures': an exposure plan; pins builds the target from standard instructions in this order: slew and "
         + "center with plate solving (slew_and_center, default true), autofocus (autofocus_at_start, default false), start "
         + "guiding (start_guiding, default true), then one exposure block per entry (filter, exposure, count, gain/offset/"
-        + "binning, dithering every dither_every frames). Coordinates are J2000. Only edits the sequence (nothing moves); "
+        + "binning, dithering every dither_every frames), with NINA's meridian flip trigger on the target (meridian_flip, "
+        + "default true; settings from the profile) so that a German equatorial mount flips instead of tracking into the "
+        + "pier. Coordinates are J2000. Only edits the sequence (nothing moves); "
         + "check the result with get_sequence, then start_sequence. Adding while the sequence runs needs force.";
 
     public override ToolAnnotations Annotations => ToolAnnotations.Change;
@@ -189,6 +202,7 @@ internal sealed class AddTargetTool : ObservatoryTool {
         arguments.Boolean("start_guiding", "Exposure plan only: start guiding before the exposures. Default true.", defaultValue: true);
         arguments.Boolean("autofocus_at_start", "Exposure plan only: run autofocus after centering. Default false.", defaultValue: false);
         arguments.Integer("dither_every", "Exposure plan only: dither after every N frames (0 = never, max 32 like NINA). Default 0.", minimum: 0, maximum: 32, defaultValue: 0);
+        arguments.Boolean("meridian_flip", "Exposure plan only: add NINA's meridian flip trigger to the target. Default true; turn off for fork mounts.", defaultValue: true);
     }
 
     protected override async Task<ToolCallResult> ExecuteAsync(ToolArguments arguments, ToolContext context, CancellationToken cancellationToken) {
@@ -233,7 +247,8 @@ internal sealed class AddTargetTool : ObservatoryTool {
             SlewAndCenter: arguments.GetBool("slew_and_center") ?? true,
             StartGuiding: arguments.GetBool("start_guiding") ?? true,
             AutofocusAtStart: arguments.GetBool("autofocus_at_start") ?? false,
-            DitherEvery: arguments.GetInt("dither_every") ?? 0);
+            DitherEvery: arguments.GetInt("dither_every") ?? 0,
+            MeridianFlip: arguments.GetBool("meridian_flip") ?? true);
 
         var result = await Observatory.AddTargetAsync(request, cancellationToken).ConfigureAwait(false);
 
@@ -382,7 +397,8 @@ internal sealed class StartSequenceTool : ObservatoryTool {
         + "with get_status, get_sequence and get_recent_images; stop with stop_sequence (or stop_all). Finished items are "
         + "skipped on a new start: reset_sequence first to run everything again. Refused while a job started over MCP "
         + "(slew, capture, autofocus, focuser move, filter change, guiding start, switch, device connection) still runs: "
-        + "wait for it with get_job or stop it with cancel_job. A running camera cooling job does not block the start.";
+        + "wait for it with get_job or stop it with cancel_job. A running camera cooling job does not block the start. The "
+        + "result notes targets that no meridian flip trigger covers.";
 
     /// <summary>
     /// Job resources the sequence would fight over: every device slot. Cooling (camera_cooler) is deliberately not listed.
@@ -417,9 +433,15 @@ internal sealed class StartSequenceTool : ObservatoryTool {
                 $"Refused: MCP jobs still use the hardware the sequence needs: {jobs}. Wait for them with get_job or stop them with cancel_job, then retry.");
         }
 
+        // A target without a flip trigger passes NINA's validation; the model hears about it with the start.
+        var note = SequenceChecks.MeridianFlipNote(Observatory.GetSequence(SequenceChecks.Depth));
+        OperationResult result;
+
         using (reservation) {
-            return FromOperation(await Observatory.StartSequenceAsync(skipValidation, cancellationToken).ConfigureAwait(false));
+            result = await Observatory.StartSequenceAsync(skipValidation, cancellationToken).ConfigureAwait(false);
         }
+
+        return FromOperation(result.Success && note is not null ? OperationResult.Ok($"{result.Message} {note}") : result);
     }
 }
 
