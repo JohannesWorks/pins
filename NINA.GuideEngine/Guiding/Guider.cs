@@ -470,6 +470,7 @@ public sealed partial class Guider : IAsyncDisposable
         settle.Cancel();
         recenter.Cancel();
         calibrationProcess = null;
+        CancelPlayProbe();
         fullPause = false;
         userPaused = false;
         Emit(new GuidingStoppedEvent(clock.UtcNow));
@@ -774,6 +775,7 @@ public sealed partial class Guider : IAsyncDisposable
             settle.Cancel();
             recenter.Cancel();
             calibrationProcess = null;
+            CancelPlayProbe();
             ClearRequests();
             CompletePending(SettleResult.Failed(state == GuiderState.Failed ? lastError?.Code ?? GuideErrorCode.Internal : GuideErrorCode.None, "guiding stopped"));
             OnLoopEndedForCoach(ct.IsCancellationRequested);
@@ -1088,7 +1090,11 @@ public sealed partial class Guider : IAsyncDisposable
             var adj = AdjustCalibration(calibration, snapshot);
             if (adj.IsValid)
             {
-                EnterGuiding(starPosition, adj, now);
+                if (!StartPlayProbe(starPosition, adj, snapshot, now, out pulses))
+                {
+                    EnterGuiding(starPosition, adj, now);
+                }
+
                 return;
             }
 
@@ -1127,6 +1133,11 @@ public sealed partial class Guider : IAsyncDisposable
 
     private MultiStarFrameResult CalibratingFrame(GuideFrame frame, MountSnapshot snapshot, DateTimeOffset now, out IReadOnlyList<PulseCommand> pulses)
     {
+        if (playProbe is not null)
+        {
+            return PlayProbeFrame(frame, snapshot, now, out pulses);
+        }
+
         var r = tracker.ProcessFrame(frame, GuidePoint.Invalid, TrackerState.Looping, now);
         var pos = r.StarFound ? r.Primary.Position : GuidePoint.Invalid;
         if (!r.StarFound)
@@ -1204,7 +1215,7 @@ public sealed partial class Guider : IAsyncDisposable
 
             Emit(new CalibrationCompleteEvent(now, MountName, result));
             Emit(new CalibrationUpdatedEvent(now, result, settings.DecFlipRequired));
-            PlayModelCalibrated(result, now);
+            PlayModelCalibrated(result, snapshot, now);
             var adj = AdjustCalibration(result, snapshot);
             EnterGuiding(starPosition.IsValid ? starPosition : lastStarPosition, adj, now);
             PlayModelAfterCalibration(result);
@@ -1216,10 +1227,18 @@ public sealed partial class Guider : IAsyncDisposable
 
     private void FailCalibration(GuideErrorCode code, string? reason, DateTimeOffset now)
     {
+        // the Dec play measurement before guiding (Guider.PlayModel.cs) fails the start as a calibration would, but no
+        // calibration failed
+        bool calibrating = playProbe is null;
         calibrationProcess = null;
+        CancelPlayProbe();
         ClearRequests();
         Alert(code, reason);
-        Emit(new CalibrationFailedEvent(now, MountName, reason ?? GuideErrorCatalog.Get(code).Title, code));
+        if (calibrating)
+        {
+            Emit(new CalibrationFailedEvent(now, MountName, reason ?? GuideErrorCatalog.Get(code).Title, code));
+        }
+
         SetState(tracker.IsLocked ? GuiderState.Selected : GuiderState.Looping);
         CompletePending(SettleResult.Failed(code, reason));
     }
@@ -1789,6 +1808,7 @@ public sealed partial class Guider : IAsyncDisposable
             corrector.GuidingStopped();
             pulseModel.Interrupt(mountMoved: true);
             calibrationProcess = null;
+            CancelPlayProbe();
             settle.Cancel();
             recenter.Cancel();
             Emit(new GuidingStoppedEvent(clock.UtcNow));
@@ -2128,6 +2148,7 @@ public sealed partial class Guider : IAsyncDisposable
         settle.Cancel();
         recenter.Cancel();
         calibrationProcess = null;
+        CancelPlayProbe();
         ClearRequests();
         fullPause = false;
         userPaused = false;

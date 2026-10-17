@@ -1551,6 +1551,9 @@ public sealed class InternalGuider : BaseINPC, IAdvancedGuider, IGuidingCoach, I
                     Logger.Info($"InternalGuider: Dec backlash compensation pulse {bl.State.PulseMs} ms (set {bl.State.SetPulseMs} ms)");
                     PersistBacklash(bl.State);
                     break;
+                case DecPlayProbeEvent dp:
+                    Logger.Info($"InternalGuider: {dp.Message}");
+                    break;
                 case BacklashPlayModelLearnedEvent bp:
                     PersistPlayModel(bp.State);
                     if (bp.InUse)

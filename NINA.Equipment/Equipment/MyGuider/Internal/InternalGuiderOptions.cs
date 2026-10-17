@@ -177,6 +177,11 @@ internal sealed class InternalGuiderOptions
                 "the play, and a needed reversal is lengthened by the play that is left. It learns the size and shape of the play " +
                 "from the calibration and from every reversal, also when the play changes over the night, and the Dec backlash " +
                 "pulse is only its first guess. It needs the Predictive Dec algorithm; with the other algorithms the fixed pulse is used."),
+        new("BacklashRemeasureAfterSlewDeg", "Re-measure Dec play after a slew of", "Algorithms", "double", "5", Unit: "°", Min: 0, Max: 180,
+            DependsOn: "BacklashModel", AppliesTo: ["PlayModel"],
+            Description: "When guiding starts after the mount moved farther than this or changed pier side, the play model measures " +
+                "the play again first: Dec pulses North until the star follows, then South back to the start. The gear then rests " +
+                "on a known side and the model knows the play at the new target. Takes about 10 to 20 guide frames. 0 = never."),
         new("PulseModel", "Pulse model", "Algorithms", "bool", "true",
             Description: "Learns from the dithers how far a guide pulse really moves the star on each axis, and sizes the pulses by " +
                 "it, so a calibration that is off no longer makes the guiding over- or under-correct. It starts as calibrated, " +
@@ -498,6 +503,7 @@ internal sealed class InternalGuiderOptions
                 Enabled = GetBool("BacklashCompensation"),
                 PulseMs = GetInt("BacklashPulseMs"),
                 Model = GetString("BacklashModel") == nameof(BacklashModel.PlayModel) ? BacklashModel.PlayModel : BacklashModel.Fixed,
+                RemeasureAfterSlewDeg = GetDouble("BacklashRemeasureAfterSlewDeg"),
             },
             PulseModel = GetBool("PulseModel"),
             DitherMode = GetString("DitherMode") == "Spiral" ? DitherMode.Spiral : DitherMode.Random,

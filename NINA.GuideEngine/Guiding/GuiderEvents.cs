@@ -331,6 +331,17 @@ public sealed record BacklashPlayModelLearnedEvent(DateTimeOffset Timestamp, Pla
     public override string Phd2Name => "BacklashPlayModelLearned";
 }
 
+/// <summary>
+/// Guiding started after the Dec play was measured again (<see cref="Calibration.DecPlayProbe"/>), or after the measurement
+/// gave up. Not part of PHD2's event set.
+/// </summary>
+/// <param name="Measured">True when the play model was seeded from the measurement.</param>
+/// <param name="Message">The guide-log line.</param>
+public sealed record DecPlayProbeEvent(DateTimeOffset Timestamp, bool Measured, string Message) : GuiderEvent(Timestamp)
+{
+    public override string Phd2Name => "DecPlayMeasured";
+}
+
 /// <summary>A processed frame is available (for the live view). Not part of PHD2's event set.</summary>
 public sealed record FrameReadyEvent(DateTimeOffset Timestamp, GuideFrame Frame, IReadOnlyList<StarInfo> Stars, GuidePoint LockPosition) : GuiderEvent(Timestamp)
 {

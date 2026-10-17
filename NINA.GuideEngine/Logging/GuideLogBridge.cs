@@ -133,6 +133,9 @@ public sealed class GuideLogBridge : IDisposable
             case PulseModelUpdatedEvent pm when guiding:
                 log.Info(PulseModelText(pm));
                 break;
+            case DecPlayProbeEvent p when guiding:
+                log.Info(p.Message);
+                break;
             case BacklashPlayModelLearnedEvent b when guiding && b.InUse:
                 log.Info(PlayModelText(b.Values));
                 break;

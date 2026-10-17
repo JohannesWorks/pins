@@ -29,6 +29,13 @@ public sealed record BacklashSettings
     /// is then only its first guess of the play.
     /// </summary>
     public BacklashModel Model { get; init; } = BacklashModel.Fixed;
+
+    /// <summary>
+    /// Play model only: when guiding starts with a kept calibration after the mount moved more than this (degrees) or
+    /// changed pier side since the play was last measured, the play is measured again first (<see cref="DecPlayProbe"/>):
+    /// the gear is driven North until the star follows, then South back to the start. 0 = never.
+    /// </summary>
+    public double RemeasureAfterSlewDeg { get; init; } = 5;
 }
 
 /// <summary>All guider settings. Immutable; apply changes with <see cref="Guider.UpdateSettings"/>.</summary>

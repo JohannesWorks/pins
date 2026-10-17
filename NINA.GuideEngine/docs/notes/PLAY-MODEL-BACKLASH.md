@@ -77,6 +77,15 @@ Dec pulse. An undershoot leaves error for the next frame, which the model knows 
 costs another reversal with the whole play. The correction reported to the algorithm is the motion the model expects
 (posterior mean), not "duration minus compensation".
 
+**After a slew.** A slew leaves the gear on an unknown side of its play, and the load and with it the play change with
+the target. When guiding starts with a kept calibration after the mount moved more than `RemeasureAfterSlewDeg`
+(default 5°) or changed pier side since the play was last measured (a calibration or this measurement; always at the
+first start of a session), `DecPlayProbe` measures it again before guiding starts, in the Calibrating state: North
+steps of about 1.5 px until the star follows three in a row (PHD2's backlash clearing), then South steps back to the
+start. The return is the take-up from a gear engaged North and seeds the model as a calibration's does; the gear is
+then engaged South and guiding locks on the star's original position. If the star does not follow, guiding starts with
+the gear's position unknown. Guide log line "Dec play measured after the slew: …".
+
 **Gate.** A pulse whose direction still has play to take up (posterior mean ≥ 60 ms) is sent only when the offset needs
 it: a one-sided CUSUM per side on z = offset/σ, S⁺ = max(0, S⁺ + z − k), k = 0.5, h = 7 (Page 1954), or |z| ≥ 4. σ is
 the frame-to-frame noise of the offset minus the corrections expected. Held, the pulse would only have moved the gear
