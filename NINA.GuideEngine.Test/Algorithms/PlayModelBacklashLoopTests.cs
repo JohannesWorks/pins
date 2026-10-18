@@ -30,6 +30,9 @@ public class PlayModelBacklashLoopTests
         ("logged wander+dither", seed => new DecPlayLoop { Seed = seed, SeeingSigmaPx = 0.06, WanderPxPerFrame = 0, SlowWanderPx = 0.2, DitherEveryFrames = 230 }),
         ("logged wander hard 600", seed => new DecPlayLoop { Seed = seed, SeeingSigmaPx = 0.06, WanderPxPerFrame = 0, SlowWanderPx = 0.2, Stages = [(600, 1.0)], DitherEveryFrames = 230 }),
         ("logged wander no backlash", seed => new DecPlayLoop { Seed = seed, SeeingSigmaPx = 0.06, WanderPxPerFrame = 0, SlowWanderPx = 0.2, Stages = [(0, 1.0)], DitherEveryFrames = 230 }),
+
+        // fitted to the A/B of 2026-10-18 (OnStepX20261018)
+        ("OnStepX 2026-10-18", seed => OnStepX20261018(seed)),
     ];
 
     private static DecPlayLoop.Result Run(DecPlayLoop loop, string mode, GuideAlgorithmKind kind, int frames = Hour)
@@ -244,6 +247,90 @@ public class PlayModelBacklashLoopTests
                         $"| {kind} | {name} | {mode} | {a.Rms:F3} | {a.Guiding:F3} | {a.Settle:F1} | {a.Reversals:F0} | {a.PulseSec:F0} |");
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// The OnStepX of 2026-10-18 after the meridian flip, fitted to an A/B of the same session (21:31–22:20, Predictive, pulse
+    /// model still neutral, dithers of up to 3.5 px every 3.5 minutes, 1.02 s frames, Dec rate 3.29 px/s): with the play
+    /// model the Dec offset was 0.157 px RMS outside settling at 267 reversals and 601 s of Dec pulses an hour, without
+    /// compensation 0.207 px at 495 and 149, the Dec frame-to-frame noise equal (0.28 and 0.30″). Of a grid of hard, medium
+    /// and soft plays of 1.6–9 s with seeing 0.06–0.1 px and slow wander 0.02–0.2 px, a hard play of 2.5 s with seeing
+    /// 0.09 px and little wander came closest (0.157/307/776 and 0.199/616/201); the plays of 2–3 s are as close. The 40 %
+    /// of the output that small corrections seemed to move at once in the log were the closed loop's bias: with such a
+    /// share the simulation guided best without compensation, the opposite of the A/B.
+    /// </summary>
+    internal static DecPlayLoop OnStepX20261018(int seed, double correctorRateFactor = 1.0) => new()
+    {
+        Seed = seed,
+        YRatePxPerMs = 0.00329,
+        FrameSec = 1.02,
+        SeeingSigmaPx = 0.09,
+        WanderPxPerFrame = 0,
+        SlowWanderPx = 0.02,
+        Stages = [(2500, 1.0)],
+        DitherEveryFrames = 205,
+        DitherPx = 3.5,
+        CorrectorRateFactor = correctorRateFactor,
+    };
+
+    [Test]
+    public void OnTheOnStepXOf20261018ThePlayModelGuidesBetterThanNoCompensation()
+    {
+        // the A/B of the night: 0.157 px with the play model, 0.207 px without (24 % less); the simulation 21 %
+        var off = Enumerable.Range(1, 3).Select(seed => OnStepX20261018(seed).Run(DecPlayLoop.Corrector(null, GuideAlgorithmKind.Predictive), Hour)).ToList();
+        var play = Enumerable.Range(1, 3).Select(seed =>
+        {
+            var loop = OnStepX20261018(seed);
+            var model = new PlayModelBacklash(900);
+            model.SeedFromCalibration(loop.CalibrationTakeUp(1550, 10), loop.YRatePxPerMs);
+            model.GearEngaged(NINA.GuideEngine.Core.GuideDirection.South);
+            return loop.Run(DecPlayLoop.Corrector(model, GuideAlgorithmKind.Predictive), Hour);
+        }).ToList();
+
+        play.Average(r => r.MeasuredGuidingRmsPx).Should().BeLessThan(0.9 * off.Average(r => r.MeasuredGuidingRmsPx));
+        play.Average(r => r.ReversalsPerHour).Should().BeLessThan(off.Average(r => r.ReversalsPerHour));
+    }
+
+    [Test]
+    [Explicit("prints the Dec backlash variants on the OnStepX of 2026-10-18")]
+    public void PrintOnStepX20261018()
+    {
+        // play+cal: seeded by a calibration's return and engaged South, as guiding starts after a calibration or the probe;
+        // pulse model: the corrector sizes Dec pulses with 0.67 × the calibrated rate, the pulse model's limit
+        (string Name, string Mode, bool Calibrated, double RateFactor)[] variants =
+        [
+            ("off", "off", false, 1.0),
+            ("fixed 900", "fixed", false, 1.0),
+            ("play", "play", false, 1.0),
+            ("play+cal", "play", true, 1.0),
+            ("play+cal, pulse model 1.5", "play", true, 1 / 1.5),
+            ("off, pulse model 1.5", "off", false, 1 / 1.5),
+        ];
+        foreach (var (name, mode, calibrated, factor) in variants)
+        {
+            var runs = Enumerable.Range(1, 5).Select(seed =>
+            {
+                var loop = OnStepX20261018(seed, factor);
+                IBacklashCompensation? backlash = mode switch
+                {
+                    "fixed" => new BacklashCompensation(900, 0, 0, enabled: true),
+                    "play" => new PlayModelBacklash(900),
+                    _ => null,
+                };
+                if (calibrated && backlash is PlayModelBacklash play)
+                {
+                    play.SeedFromCalibration(loop.CalibrationTakeUp(1550, 10), loop.YRatePxPerMs);
+                    play.GearEngaged(NINA.GuideEngine.Core.GuideDirection.South);
+                }
+
+                var r = loop.Run(DecPlayLoop.Corrector(backlash, GuideAlgorithmKind.Predictive), Hour);
+                return (Result: r, Play: (backlash as PlayModelBacklash)?.Values);
+            }).ToList();
+            double Avg(Func<DecPlayLoop.Result, double> v) => runs.Select(x => v(x.Result)).Where(double.IsFinite).DefaultIfEmpty(double.NaN).Average();
+            string learned = runs[0].Play is null ? string.Empty : $" | learned {string.Join("/", runs.Select(x => $"{x.Play!.FullReversalMs:F0}"))} ms";
+            TestContext.Out.WriteLine(FormattableString.Invariant(
+                $"| {name} | true {Avg(r => r.TrueRmsPx):F3} | guiding {Avg(r => r.GuidingRmsPx):F3} | measured {Avg(r => r.MeasuredGuidingRmsPx):F3} | settle {Avg(r => r.SettleFramesMean):F1} | {Avg(r => r.ReversalsPerHour):F0} rev/h | {Avg(r => r.PulseSecPerHour):F0} s/h | at limit {Avg(r => r.LimitPulses / r.Hours):F0}/h{learned}"));
         }
     }
 }

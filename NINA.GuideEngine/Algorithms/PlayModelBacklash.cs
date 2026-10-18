@@ -213,15 +213,13 @@ public sealed class PlayModelBacklash : IBacklashCompensation
         }
     }
 
-    public void Enable(bool enable)
-    {
-        if (enable && !IsEnabled)
-        {
-            ResetState();
-        }
-
-        IsEnabled = enable;
-    }
+    /// <summary>
+    /// Switches the compensation on or off. The gear is tracked while it is off too (<see cref="PulseSent"/> and
+    /// <see cref="TrackResults"/> run either way), so switching it on keeps the gear's position; a host that did not feed
+    /// the model in between calls <see cref="ResetState"/>. Before, switching it on forgot the position, and the first pulse
+    /// got half the play without the gate (a 0.15 px offset sent 947 ms on the OnStepX of 2026-10-18, 4″ the other way).
+    /// </summary>
+    public void Enable(bool enable) => IsEnabled = enable;
 
     /// <summary>A new prior guess of the full reversal (e.g. the setting changed); what was learned is kept.</summary>
     public void SetPriorFullReversal(double fullReversalMs)

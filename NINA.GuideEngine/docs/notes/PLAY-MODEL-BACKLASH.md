@@ -267,3 +267,16 @@ frame after frame, entered the noise estimate as wander, which took the noise th
 sums are now capped at h, and a change from or to an offset of more than `LargeOffsetSigmas` = 12 σ stays out of the
 noise estimate. At 4–8 σ the closed-loop "no backlash + dither" case lost 5 % (0.165 against 0.157 px); at 12 σ it is
 unchanged (0.157).
+
+### A/B after the fixes (21:31–22:20, same session, pier East)
+
+With the play model (28 min) Dec was 0.47″ RMS outside settling at 267 reversals an hour, 4 % of them overshooting and
+2 pulses at the 2500 ms limit an hour; with the compensation off (20 min) 0.62″ at 495 reversals, the Dec frame-to-frame
+noise equal (0.28 and 0.30″), every 5-minute block worse. The pulse model was still neutral (learning after a new
+calibration). A simulation scenario with 40 % of the output following small corrections at once, as the closed-loop
+regressions of the log suggested, guided best without compensation, the opposite of the A/B: those regressions are
+biased. Fitted to the A/B over a grid of hard, medium and soft plays, the closest was a hard play of 2–3 s with seeing
+0.09 px and little wander (`PlayModelBacklashLoopTests.OnStepX20261018`, in the scenario list as "OnStepX 2026-10-18").
+There the play model without a calibration's seed guided 15 % better than seeded (0.134 against 0.157 px measured): the
+seed's shape mixes the two grid widths around the play. Not changed on one night of one mount; the same holds for
+leaving the pulse model's Dec effect neutral under the play model (better RMS, longer settling in the scenario).

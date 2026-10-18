@@ -57,6 +57,12 @@ public sealed partial class Guider
         }
 
         playBacklash.Limiter = limiter;
+        if (!ReferenceEquals(corrector.Backlash, playBacklash))
+        {
+            // the fixed compensation was in use: the model saw none of its pulses
+            playBacklash.ResetState();
+        }
+
         playBacklash.SetPriorFullReversal(s.Backlash.PulseMs);
         playBacklash.Enable(s.Backlash.Enabled);
         return playBacklash;

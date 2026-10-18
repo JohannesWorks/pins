@@ -142,6 +142,22 @@ public class PlayModelBacklashTests
     }
 
     [Test]
+    public void SwitchingTheCompensationBackOnKeepsTheGearItTrackedWhileOff()
+    {
+        var play = Learned(600);
+        play.GearEngaged(GuideDirection.South);
+        play.Enable(false);
+
+        // guiding goes on without compensation: the model still sees the pulses
+        play.PulseSent(GuideDirection.North, 1000);
+        play.Enable(true);
+
+        play.Values.StateKnown.Should().BeTrue();
+        play.Values.Engaged.Should().Be(GuideDirection.North);
+        Compensation(play, GuideDirection.North, 100).Should().Be(0, "the gear is engaged North, a North pulse needs no play");
+    }
+
+    [Test]
     public void TheCompensationNeverExceedsTheMaxPulse()
     {
         var limiter = new PulseLimiter();
