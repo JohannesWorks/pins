@@ -164,4 +164,28 @@ public class ReversalGateTests
 
         gate.NoiseSigmaPx.Should().Be(ReversalGate.MinNoisePx);
     }
+
+    [Test]
+    public void APastLargeOffsetDoesNotLetSmallOnesThrough()
+    {
+        var rng = new Random(11);
+        var gate = new ReversalGate();
+        for (int i = 0; i < 200; i++)
+        {
+            gate.Observe(0.1 * Gauss(rng), 0);
+        }
+
+        // a dither: the star 3.6 px off for a few frames, then back (frames 6089-6093 of the 2026-10-18 log)
+        foreach (double offset in new[] { 3.6, 3.2, 1.25, 0.45 })
+        {
+            gate.Observe(offset, 0);
+        }
+
+        gate.Allows(1).Should().BeTrue("the dither itself is a real offset");
+        gate.SouthEvidence.Should().BeLessThanOrEqualTo(ReversalGate.DefaultThreshold);
+
+        gate.Observe(0.0, 0);
+        gate.Observe(0.04, 0);
+        gate.Allows(1).Should().BeFalse("0.04 px is noise once the star is back");
+    }
 }

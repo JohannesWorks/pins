@@ -258,3 +258,12 @@ survive a restart; before, the prior was built around the "Dec backlash pulse" s
 offsets and pulses through the model (open loop, so the pulses are the night's): without the limit 10/50/90 % of the
 frames held 1.3/3.1/5.4 s and 14 % more than 4.5 s, with it 1.9/3.2/4.5 s, at most 4.76 s. Whether the overshoots go with
 it is for the next night to show.
+
+After the meridian flip the probe measured the play again (North 1980 ms, South 7179 ms, the model at 3.7 s) and the
+size stayed at 3.1–4.3 s, but 16 reversals in 6 minutes went out at the 2500 ms limit for offsets of 0.04–0.5 px. The
+gate's CUSUM took a Dec dither of 3.6 px (z ≈ 34) in full: the sum reached 33–55 σ and, worn down by k = 0.5 a frame,
+stayed above h = 7 for about 100 frames, letting every reversal that way through; and the star's way back, one way
+frame after frame, entered the noise estimate as wander, which took the noise the gate uses down to `MinNoisePx`. The
+sums are now capped at h, and a change from or to an offset of more than `LargeOffsetSigmas` = 12 σ stays out of the
+noise estimate. At 4–8 σ the closed-loop "no backlash + dither" case lost 5 % (0.165 against 0.157 px); at 12 σ it is
+unchanged (0.157).
