@@ -42,7 +42,7 @@ public class ReversalGateTests
             }
         }
 
-        // the estimate follows the noise with a memory of about 20 frames: on average it is the noise σ
+        // the estimate follows the noise over its window: on average it is the noise σ
         (sum / 3000).Should().BeApproximately(0.2, 0.02);
     }
 
@@ -100,6 +100,53 @@ public class ReversalGateTests
         gate.Observe(-0.1 * (ReversalGate.ImmediateSigmas + 1), 0);
         gate.Allows(-1).Should().BeTrue();
         gate.Allows(1).Should().BeFalse();
+    }
+
+    [Test]
+    public void AStarThatWandersIsFollowed()
+    {
+        // a random walk of 0.12 px a frame and 0.06 px of seeing, as on the Sky Simulator session of 2026-10-18, each offset
+        // corrected in full: the frame-to-frame noise is about 0.10 px, but most of it is the star moving
+        var rng = new Random(17);
+        var gate = new ReversalGate();
+        double star = 0, corrected = 0, lastCorrection = 0;
+        for (int i = 0; i < 2000; i++)
+        {
+            star += 0.12 * Gauss(rng);
+            double offset = star - corrected + 0.06 * Gauss(rng);
+            gate.Observe(offset, lastCorrection);
+            corrected += offset;
+            lastCorrection = offset;
+        }
+
+        gate.NoiseSigmaPx.Should().BeGreaterThan(0.09);
+        gate.ResetEvidence();
+
+        // an offset of more than five times the seeing is the star, and is followed at once
+        gate.Observe(0.32, 0);
+        gate.Allows(1).Should().BeTrue();
+    }
+
+    [Test]
+    public void CorrectionsTheMountDidNotMakeDoNotInflateTheNoise()
+    {
+        // every 8th frame a correction of about 1–9 px is expected but the star does not move, as with the compensated
+        // reversals of the PHD2 logs of 2026-09/10
+        var rng = new Random(13);
+        var gate = new ReversalGate();
+        double sum = 0;
+        for (int i = 0; i < 4000; i++)
+        {
+            double missing = i % 8 == 0 ? 1 + 8 * rng.NextDouble() : 0;
+            gate.Observe(0.1 * Gauss(rng), missing);
+            if (i >= 1000)
+            {
+                sum += gate.NoiseSigmaPx;
+            }
+        }
+
+        (sum / 3000).Should().BeApproximately(0.1, 0.02);
+        gate.NoiseComponents.WhitePx2.Should().BeLessThan(4 * 0.1 * 0.1);
     }
 
     [Test]

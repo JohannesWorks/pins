@@ -19,7 +19,15 @@ namespace NINA.GuideEngine.Algorithms;
 /// it does not move the star; a real offset or drift builds up the evidence and gets through.</para>
 /// <para>σ is learned from the frame-to-frame changes of the offset minus the corrections the model expects to have
 /// acted: σ² ≈ E[(Δe)²] / 2 for independent frames, an exponentially weighted mean with each change clipped at
-/// <see cref="ClipSigmas"/> σ so that a dither or a jump does not inflate it.</para>
+/// <see cref="ClipSigmas"/> σ so that a dither or a jump does not inflate it. A frame after a correction of more than
+/// <see cref="UncertainCorrectionSigmas"/> σ is left out: its change measures how well the size of the correction is
+/// known, not the seeing. Replaying PHD2 guide logs of 2026-09/10 whose compensated reversals had not moved the star,
+/// each such frame raised the clipped mean a little, and it settled at about 5–7 × the real noise.</para>
+/// <para>z is taken against σ² − (½ − <see cref="WanderShare"/>) q, the frame-to-frame noise without most of the wander q
+/// (<see cref="NoiseComponents"/>): a wander is the star really moving, which the guiding has to follow, not a noise to
+/// sit out. Against the whole σ² the gate held back a Dec that wandered like a random walk until it had gone far; on the
+/// Sky Simulator session of 2026-10-18 (0.12 px of random walk a frame against 0.06 px of seeing) the Dec RMS was 0.19 px
+/// instead of 0.16. Without wander (or a negative one, as an over-correcting loop makes) it is σ² as before.</para>
 /// </remarks>
 public sealed class ReversalGate
 {
@@ -43,6 +51,16 @@ public sealed class ReversalGate
 
     /// <summary>Frame-to-frame changes are clipped at this many σ before they enter the noise estimate.</summary>
     public const double ClipSigmas = 4.0;
+
+    /// <summary>A frame after an expected correction of more than this many σ does not enter the noise estimate.</summary>
+    public const double UncertainCorrectionSigmas = 4.0;
+
+    /// <summary>
+    /// Share of the wander q that the gate still counts as noise (½ would be the whole frame-to-frame noise). Not 0: the
+    /// split of the noise into white and wander comes from a few dozen frames and is uncertain, and in the closed-loop
+    /// simulations 0 cost a little where there is a hard play or a drift (docs/notes/PLAY-MODEL-BACKLASH.md).
+    /// </summary>
+    public const double WanderShare = 0.1;
 
     /// <summary>Frames before the noise estimate is used; until then every reversal is allowed.</summary>
     public const int WarmupFrames = 5;
@@ -109,7 +127,12 @@ public sealed class ReversalGate
             return;
         }
 
-        if (lastOffset is { } previous && double.IsFinite(expectedCorrectionPx))
+        if (noiseFrames > 0 && Math.Abs(expectedCorrectionPx) > UncertainCorrectionSigmas * Math.Max(NoiseSigmaPx, MinNoisePx))
+        {
+            // nor does the two-frame change that would include it
+            lastChange = null;
+        }
+        else if (lastOffset is { } previous && double.IsFinite(expectedCorrectionPx))
         {
             double change = offsetPx - previous + expectedCorrectionPx;
             double v = 0.5 * change * change;
@@ -143,7 +166,8 @@ public sealed class ReversalGate
             return;
         }
 
-        lastZ = offsetPx / NoiseSigmaPx;
+        double variance = NoiseSigmaPx * NoiseSigmaPx - (0.5 - WanderShare) * NoiseComponents.WanderPx2PerFrame;
+        lastZ = offsetPx / Math.Sqrt(Math.Max(MinNoisePx * MinNoisePx, variance));
         sumSouth = Math.Max(0, sumSouth + lastZ - Allowance);
         sumNorth = Math.Max(0, sumNorth - lastZ - Allowance);
     }

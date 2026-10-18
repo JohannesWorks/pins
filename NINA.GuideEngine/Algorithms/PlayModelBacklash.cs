@@ -433,7 +433,8 @@ public sealed class PlayModelBacklash : IBacklashCompensation
             expectedCorrectionPx += sign * EffectiveMs(direction, durationMs, LastCompensationMs) * yRatePxPerMs;
         }
 
-        if (lastDirection is { } last && last != direction)
+        bool reversal = lastDirection is { } last && last != direction;
+        if (reversal)
         {
             Reversals++;
         }
@@ -445,9 +446,10 @@ public sealed class PlayModelBacklash : IBacklashCompensation
             window = null;
         }
 
-        // a pulse that takes up play opens a window: what the star does next tells how much play there was
+        // a pulse that takes up play opens a window: what the star does next tells how much play there was. Every reversal
+        // does, also when the model expects no play there: else a model sure of no play never measures a play that appears
         if (window is null && double.IsFinite(lastRawOffset) && double.IsFinite(yRatePxPerMs)
-            && Mean(Posterior(), h => h.Slack(direction)) >= GateMinSlackMs)
+            && (reversal || Mean(Posterior(), h => h.Slack(direction)) >= GateMinSlackMs))
         {
             window = new Window(direction, lastRawOffset, hypotheses.Select(h => h.Snapshot()).ToArray());
         }

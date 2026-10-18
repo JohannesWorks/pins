@@ -168,7 +168,7 @@ public sealed partial class Guider
         playMeasuredAt = snapshot;
 
         bool measured = probe.Phase == DecPlayProbePhase.Measured;
-        bool seeded = measured && playBacklash.SeedFromCalibration(probe.TakeUp, adj.Calibration.YRate);
+        bool seeded = measured && playBacklash.SeedFromCalibration(probe.TakeUp, probe.RatePxPerMs);
         EnterGuiding(playProbeStart, adj, now);
         if (measured)
         {
@@ -176,9 +176,12 @@ public sealed partial class Guider
             playBacklash.GearEngaged(GuideDirection.South);
         }
 
+        string rate = probe.RateMeasured
+            ? $", Dec rate {probe.RatePxPerMs * 1000:0.000} px/s (calibrated {adj.Calibration.YRate * 1000:0.000} px/s)"
+            : "";
         string message = !measured ? $"Dec play not measured after the slew: {probe.FailureReason}"
-            : seeded ? $"Dec play measured after the slew: North {probe.NorthMs} ms, South {probe.SouthMs} ms, gear engaged South"
-            : $"Dec play after the slew: gear engaged South (North {probe.NorthMs} ms, South {probe.SouthMs} ms), the return too short to fit the play";
+            : seeded ? $"Dec play measured after the slew: North {probe.NorthMs} ms, South {probe.SouthMs} ms, gear engaged South{rate}"
+            : $"Dec play after the slew: gear engaged South (North {probe.NorthMs} ms, South {probe.SouthMs} ms), the return too short to fit the play{rate}";
         Emit(new DecPlayProbeEvent(now, seeded, message));
         if (seeded)
         {

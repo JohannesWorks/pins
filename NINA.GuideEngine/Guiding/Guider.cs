@@ -116,6 +116,10 @@ public sealed partial class Guider : IAsyncDisposable
     private double lastGoodMass;
     private double lastGoodSnr;
     private DateTimeOffset lastSlowAlert = DateTimeOffset.MinValue;
+
+    // a driver that rejects pulses may do so at every Dec reversal: alert once per interval, with the count
+    private DateTimeOffset lastPulseRejectedAlert = DateTimeOffset.MinValue;
+    private int pulsesRejectedSinceAlert;
     private GuideErrorInfo? lastError;
     private GuidingStatsSnapshot? lastStats;
     private readonly CycleTimer cycleTimer = new();
@@ -1942,6 +1946,12 @@ public sealed partial class Guider : IAsyncDisposable
         {
             throw;
         }
+        catch (PulseRejectedException ex)
+        {
+            // the output works, the mount did not move: not a step towards giving up on the output
+            PulseRejected(ex.Message);
+            return false;
+        }
         catch (Exception ex)
         {
             Alert(GuideErrorCode.PulseOutputFailed, ex.Message);
@@ -1952,6 +1962,20 @@ public sealed partial class Guider : IAsyncDisposable
 
             return false;
         }
+    }
+
+    private void PulseRejected(string reason)
+    {
+        pulsesRejectedSinceAlert++;
+        var now = clock.UtcNow;
+        if ((now - lastPulseRejectedAlert).TotalMinutes < 5)
+        {
+            return;
+        }
+
+        lastPulseRejectedAlert = now;
+        Alert(GuideErrorCode.PulseRejected, $"{reason} ({pulsesRejectedSinceAlert} rejected since the last alert)");
+        pulsesRejectedSinceAlert = 0;
     }
 
     #endregion

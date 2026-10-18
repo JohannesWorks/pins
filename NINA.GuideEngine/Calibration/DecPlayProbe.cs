@@ -25,14 +25,26 @@ public enum DecPlayProbePhase
 /// the star follows <see cref="EngagedMoves"/> of them in a row (PHD2's backlash clearing), then South pulses back to the
 /// start, whose pulse time and motion since the reversal are the take-up curve of the play, as the calibration's South
 /// return (<see cref="CalibrationData.DecTakeUp"/>). The star ends near where it started, the gear engaged South.
+/// The Dec rate is measured again on the engaged North steps (<see cref="RatePxPerMs"/>): the take-up is read against
+/// it, and a rate that changed since the calibration (pier side, declination, load) would otherwise bend the curve.
 /// </summary>
 public sealed class DecPlayProbe
 {
     /// <summary>Pulses in a row the star has to follow before the gear counts as engaged (PHD2 BL_BACKLASH_MIN_COUNT).</summary>
     public const int EngagedMoves = 3;
 
-    /// <summary>Share of a step's expected motion a pulse has to move the star to count as followed (PHD2: 0.6).</summary>
+    /// <summary>
+    /// Share of the previous step's motion the last step has to reach for the gear to count as engaged (PHD2: 0.6 of the
+    /// calibrated motion). Relative to the motion seen rather than to the calibration: after a slew the Dec rate may be
+    /// half or double the calibrated one (pier side, declination, load).
+    /// </summary>
     public const double MoveFraction = 0.6;
+
+    /// <summary>
+    /// Share of a step's calibrated motion a pulse has to move the star to count as followed at all: the lowest Dec rate,
+    /// relative to the calibration, the probe still measures.
+    /// </summary>
+    public const double MinMoveFraction = 0.25;
 
     /// <summary>Star motion one step makes with the gear engaged (px): the resolution of the take-up curve.</summary>
     public const double StepPx = 1.5;
@@ -40,8 +52,9 @@ public sealed class DecPlayProbe
     /// <summary>Shortest pulse sent (ms).</summary>
     public const int MinStepMs = 50;
 
-    private readonly double yRate;
     private readonly double maxPlayMs;
+    private readonly List<double> northSteps = [];
+    private double yRate;
     private readonly List<DecTakeUpPoint> takeUp = [];
     private bool started;
     private double lastPx;
@@ -74,6 +87,15 @@ public sealed class DecPlayProbe
 
     /// <summary>South pulse time sent since the reversal (ms).</summary>
     public int SouthMs { get; private set; }
+
+    /// <summary>
+    /// Dec rate (px/ms) the take-up is read against: measured on the engaged North steps once the gear engaged, the
+    /// calibrated rate until then.
+    /// </summary>
+    public double RatePxPerMs => yRate;
+
+    /// <summary>True when <see cref="RatePxPerMs"/> was measured on the North steps rather than taken from the calibration.</summary>
+    public bool RateMeasured { get; private set; }
 
     /// <summary>The return: South pulse time since the reversal and the star's motion South since then (px).</summary>
     public IReadOnlyList<DecTakeUpPoint> TakeUp => takeUp;
@@ -133,7 +155,8 @@ public sealed class DecPlayProbe
 
         double step = decPx - lastPx;
         lastPx = decPx;
-        followed = step >= MoveFraction * expected ? followed + 1 : 0;
+        followed = step >= MinMoveFraction * expected ? followed + 1 : 0;
+        northSteps.Add(step);
 
         if (decPx <= -EngagedMoves * expected)
         {
@@ -141,8 +164,11 @@ public sealed class DecPlayProbe
             return Fail("North pulses moved the star South");
         }
 
-        if (followed >= EngagedMoves)
+        // engaged once the star followed several pulses in a row and the one before the last already moved it about as far as
+        // the last: while the play is still being taken up the motion per pulse grows
+        if (followed >= EngagedMoves && northSteps[^2] >= MoveFraction * step)
         {
+            MeasureRate();
             Phase = DecPlayProbePhase.ReturnSouth;
             reversalPx = decPx;
 
@@ -189,6 +215,19 @@ public sealed class DecPlayProbe
         int ms = (int)Math.Clamp(Math.Round(decPx / yRate), MinStepMs, StepMs);
         SouthMs += ms;
         return new PulseCommand(GuideDirection.South, ms);
+    }
+
+    // the rate from the followed North steps but the first, which may still have taken up the end of the play
+    private void MeasureRate()
+    {
+        int n = EngagedMoves - 1;
+        double moved = northSteps.Skip(northSteps.Count - n).Sum();
+        double rate = moved / (n * (double)StepMs);
+        if (rate > 0 && double.IsFinite(rate))
+        {
+            yRate = rate;
+            RateMeasured = true;
+        }
     }
 
     private PulseCommand North()

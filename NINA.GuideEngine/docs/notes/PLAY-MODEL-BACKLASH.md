@@ -141,7 +141,11 @@ or swallowed correction is still part of their state. So the play model is used 
 ## 5. Limits
 
 - The simulator is not the mount. The log fits a play wider than every travel the guiding made, but it does not rule out
-  a mount that drops short pulses; the live test decides (guide log line "Backlash play model: …" per take-up). Where
+  a mount that drops pulses (§6); the live test decides (guide log line "Backlash play model: …" per take-up, and the
+  `PulseRejected` warning or the NINA log's notes on pulses an INDI driver ended early).
+- A pulse the mount drops without saying so looks like play to the model, and it learns one: in `DecPlayLoop` with a hard
+  150 ms play and silently dropped reversals of 300 ms or more, it learns 2.8 s and guides worse than without
+  compensation (§6). Only a reported drop is safe. Where
   the play depends on the target, a balance that keeps the Dec gear loaded on one side helps any compensation.
 - The play is symmetric (one size for both directions). A Dec axis that loses more one way would need per-direction
   widths.
@@ -158,3 +162,73 @@ or swallowed correction is still part of their state. So the play model is used 
   The coach runs no trial of play model against fixed pulse: the model learns from take-ups (a memory of about 20) and gains
   mostly around dithers, without which it guides slightly worse (no dither above), so a few minutes of trial would
   judge it unfairly.
+
+## 6. PHD2 guide logs of 2026-09-26 to 10-06
+
+Seven nights of PHD2 2.6.15 (pins build) on the same rig over INDI (LX200 OnStep), Dec guided by Hysteresis or
+ResistSwitch with PHD2's adaptive backlash compensation, 0.5 s exposures in all but two sessions. The play model was
+not in use; the logs were analysed after its implementation to see whether it covers them.
+
+- **The compensation ran away every night.** At reversals with offsets of 0.15–0.3 px (seeing), PHD2's adaptive logic
+  judged the following frames an undershoot and grew the pulse from 20–50 ms to 1.5–3 s over 2–3 hours (4.3 s at most),
+  raising "Dec Max Duration" to 3000 ms on the way. The internal guider's port caps it at 1.5 × the setting unless a
+  ceiling is set.
+- **The compensation part of a reversal did not move the star.** After reversals of 0.3–3 s the star moved 0.15–0.3 px
+  of 1–9 px commanded (most of it the offset's own return), and nothing followed over the next 20 frames. Pulses of the
+  same length in the direction of the pulse before moved it fully (0.44 of 0.43 px).
+- **PHD2 did not wait for it.** After a continuing pulse the next frame came the pulse length later (500 ms → +0.5 s,
+  1250 ms → +1.9 s); after a reversal, the compensation part was missing from the interval (a 3 s reversal was over
+  after 0.9 s, the bare exposure). PHD2's INDI mount waits until the timed-guide property is no longer Busy, so the
+  driver reported those pulses as ended at once. Whether it rejected them (Alert) or ended them (Ok) the log does not
+  say; reversals under 200 ms were waited for on both pier sides.
+- **What the play model would learn from them.** `PlayModelGuideLogReplay` with the logged pulses as sent: 0–600 ms on
+  the sessions before the compensation had grown, 3.5–8 s on those after (the largest size of its grid). Two sessions
+  instead drove the gate's noise estimate to 0.42 and 0.54 px (real: about 0.07); a correction the mount did not make is
+  one large frame-to-frame change, and the clipped mean took each one in. Frames after a correction of more than 4 σ
+  are now left out of it (0.11 and 0.24 px; the closed-loop results of §4 are unchanged within ±0.003 px).
+- **Consequences.** The internal guider waits the full length of every pulse and then the driver's flag, so the timing
+  is not the issue; a dropped pulse is. An INDI Alert on a guide pulse now reaches the guider as
+  `PulseRejectedException`: the pulse counts as not sent and the play model forgets the gear's position. In
+  `DecPlayLoop` with a hard 150 ms play and reversals of 300 ms or more rejected (`DropReversalsFromMs`,
+  `ReportDropped`), it then learns 146–157 ms and guides at 1.06 × the RMS without compensation; dropped silently it
+  learns 2.8 s at 1.9 ×. A driver that ends a pulse early with Ok is only noted in the NINA log, as some drivers end it
+  as soon as the mount, which times it, has accepted it. Whether the OnStep INDI driver rejects or ends such pulses, and
+  whether the native OnStepX driver drops any, is open and decides whether this covers the mount.
+
+## 7. The gate and a wandering Dec (2026-10-18)
+
+A Sky Simulator session (OnStep profile, pier West with a hard 3″ play, 410 ms at 7.3″/s) guided Dec at 0.64″ RMS
+against RA's 0.43″, although the profile gives Dec less drift and wander than RA. The play model had learned the play
+right (357–412 ms). The cost was the gate: the profile's Dec random walk of 0.25″/√s is 0.12 px a frame at its 2.1 s
+frames, twice the seeing, and the gate took z against the whole frame-to-frame noise, wander included. It held back the
+star's own motion until it had gone far (478 corrections held in 41 minutes, lag-1 autocorrelation of the Dec offset
+0.63).
+
+The gate now takes z against σ² − (½ − `WanderShare`) q: the frame-to-frame noise without most of the estimated wander q.
+Without wander, or with a negative one as an over-correcting loop makes, this is σ² as before. Closed loop
+(`DecPlayLoop`, Predictive, play model, mean of 5 seeds, RMS of the true offset in px; the session's case also on the
+simulator's 0.2 px centroid grid, `MeasurementQuantumPx`):
+
+| Scenario | share ½ (before) | share 0.1 | share 0 |
+|---|---|---|---|
+| Sky Simulator session | 0.187 | 0.164 | 0.158 |
+| Sky Simulator session, 0.2 px grid | 0.197 | 0.179 | 0.173 |
+| logged wander + dither | 0.219 | 0.195 | 0.188 |
+| logged wander, hard 600 | 0.220 | 0.205 | 0.199 |
+| hard 2000, drift + dither | 0.179 | 0.174 | 0.174 |
+| hard 600 + dither | 0.170 | 0.171 | 0.174 |
+| drift 0.006 + dither | 0.167 | 0.167 | 0.171 |
+| OnStepX + dither | 0.159 | 0.157 | 0.159 |
+| no backlash + dither | 0.151 | 0.150 | 0.151 |
+
+0.1 keeps most of the gain and none of the losses that 0 shows with a hard play or a drift, where the white/wander split
+of a few dozen frames is too uncertain to trust in full. The wander is followed, so the reversals rise where it is large
+(Sky Simulator 140 → 246 an hour, logged wander 211 → 687, still fewer than the fixed pulse's); elsewhere they barely
+change. The "no backlash" row is 0.151 rather than §4's 0.142 for both, as the play model changed in between (every
+reversal now opens a take-up window).
+
+With a fixed pulse of exactly the right size, Hysteresis and ResistSwitch did better on the session's case than the play
+model with the old gate (0.157 and 0.165 against 0.192 without the grid); with the new gate the play model reaches
+0.158–0.166 without having been told the size. The Predictive correction pace mattered little: 0.7 against 0.5 gained
+about 3 %.
+

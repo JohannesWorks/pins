@@ -54,6 +54,26 @@ internal sealed class DecPlayLoop
 
     public int SettleFrames { get; init; } = 3;
 
+    /// <summary>
+    /// The measured offset snaps to multiples of this (px); 0 = it does not. The Sky Simulator renders a star of HFD ≤ 3 px
+    /// from 5 × 5 samples per pixel placed relative to the star and rounded to whole pixels, so its image, and the
+    /// centroid, moves in steps of 0.2 px.
+    /// </summary>
+    public double MeasurementQuantumPx { get; init; }
+
+    /// <summary>
+    /// Dec reversals (a pulse against the previous Dec pulse sent) of at least this many ms are not carried out; null =
+    /// all are. In the PHD2 guide logs of 2026-09/10 on an OnStep mount over INDI, compensated reversals ended at once
+    /// and did not move the star.
+    /// </summary>
+    public int? DropReversalsFromMs { get; init; }
+
+    /// <summary>
+    /// The mount reports a reversal it did not carry out (an INDI Alert): the guider then treats the frame's pulses as not
+    /// sent, as Guider does for a <see cref="PulseRejectedException"/>.
+    /// </summary>
+    public bool ReportDropped { get; init; }
+
     public sealed record Result(double TrueRmsPx, double MeasuredRmsPx, int Reversals, double DecPulseSec, int Frames, int Held, double Hours)
     {
         /// <summary>Mean frames from a dither until it settled (NaN without dithers).</summary>
@@ -61,6 +81,9 @@ internal sealed class DecPlayLoop
 
         /// <summary>RMS of the true offset outside the settling after dithers (px).</summary>
         public double GuidingRmsPx { get; init; } = double.NaN;
+
+        /// <summary>Dec pulses the mount did not carry out (<see cref="DropReversalsFromMs"/>).</summary>
+        public int Dropped { get; init; }
 
         public double ReversalsPerHour => Reversals / Hours;
 
@@ -81,7 +104,7 @@ internal sealed class DecPlayLoop
         double mount = 0;         // what the gear moved it back (px)
         var t0 = new DateTimeOffset(2026, 10, 12, 21, 31, 0, TimeSpan.Zero);
         double sumTrue = 0, sumMeasured = 0;
-        int reversals = 0, held = 0;
+        int reversals = 0, held = 0, dropped = 0;
         double pulseMs = 0;
         GuideDirection? last = null;
         double lockOffset = 0;
@@ -134,6 +157,13 @@ internal sealed class DecPlayLoop
             }
 
             double measured = truth + SeeingSigmaPx * Gauss(rng);
+            if (MeasurementQuantumPx > 0)
+            {
+                // the grid is fixed to the sensor; the lock position sits somewhere on it
+                const double gridPhase = 0.07;
+                measured = MeasurementQuantumPx * Math.Round((measured + gridPhase) / MeasurementQuantumPx) - gridPhase;
+            }
+
             sumTrue += truth * truth;
             sumMeasured += measured * measured;
 
@@ -145,15 +175,24 @@ internal sealed class DecPlayLoop
                 held++;
             }
 
+            bool reported = false;
             foreach (var p in corr.Pulses.Where(p => p.Direction.Axis() == GuideAxis.Dec))
             {
                 pulseMs += p.DurationMs;
-                if (last is { } l && l != p.Direction)
+                bool reversal = last is { } l && l != p.Direction;
+                if (reversal)
                 {
                     reversals++;
                 }
 
                 last = p.Direction;
+                if (reversal && p.DurationMs >= DropReversalsFromMs)
+                {
+                    dropped++;
+                    reported |= ReportDropped;
+                    continue;
+                }
+
                 double motor = (p.Direction == GuideDirection.South ? 1 : -1) * p.DurationMs;
                 double moved = 0;
                 for (int i = 0; i < n; i++)
@@ -166,7 +205,18 @@ internal sealed class DecPlayLoop
                 mount += moved * YRatePxPerMs;
             }
 
-            corrector.CorrectionsApplied(0, corr.DecCorrectionPx);
+            if (reported)
+            {
+                // Guider.PlayModelPulsesNotSent
+                if (corrector.Backlash is PlayModelBacklash playModel)
+                {
+                    playModel.ResetState();
+                }
+            }
+            else
+            {
+                corrector.CorrectionsApplied(0, corr.DecCorrectionPx);
+            }
         }
 
         double hours = frames * FrameSec / 3600;
@@ -174,6 +224,7 @@ internal sealed class DecPlayLoop
         {
             SettleFramesMean = settledCount > 0 ? settleSum / settledCount : double.NaN,
             GuidingRmsPx = guidingFrames > 0 ? Math.Sqrt(guidingSum / guidingFrames) : double.NaN,
+            Dropped = dropped,
         };
     }
 

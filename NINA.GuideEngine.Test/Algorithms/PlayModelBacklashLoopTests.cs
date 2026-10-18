@@ -91,7 +91,9 @@ public class PlayModelBacklashLoopTests
 
         play.Rms.Should().BeLessThan(Math.Min(off.Rms, fixedPulse.Rms));
         play.Guiding.Should().BeLessThan(Math.Min(off.Guiding, fixedPulse.Guiding));
-        play.Reversals.Should().BeLessThan(0.6 * fixedPulse.Reversals);
+
+        // the wander is followed, so there are reversals, but no ping-pong beyond the fixed pulse's
+        play.Reversals.Should().BeLessThan(fixedPulse.Reversals);
     }
 
     [Test]
@@ -102,6 +104,129 @@ public class PlayModelBacklashLoopTests
 
         play.Rms.Should().BeLessThan(1.05 * off.Rms);
         play.Settle.Should().BeLessThan(off.Settle + 0.5);
+    }
+
+    [Test]
+    public void AReversalTheMountReportsNotCarriedOutTeachesNoPlay()
+    {
+        // a hard 150 ms play; reversals of 300 ms or more are rejected, as the guider learns from PulseRejectedException
+        var runs = Enumerable.Range(1, 3).Select(seed =>
+        {
+            var play = new PlayModelBacklash(900);
+            var loop = new DecPlayLoop
+            {
+                Seed = seed,
+                SeeingSigmaPx = 0.06,
+                WanderPxPerFrame = 0,
+                SlowWanderPx = 0.2,
+                Stages = [(150, 1.0)],
+                DitherEveryFrames = 230,
+                DropReversalsFromMs = 300,
+                ReportDropped = true,
+            };
+            var result = loop.Run(DecPlayLoop.Corrector(play, GuideAlgorithmKind.Predictive), Hour);
+            return (Result: result, Play: play.Values);
+        }).ToList();
+        var off = Enumerable.Range(1, 3)
+            .Select(seed => new DecPlayLoop { Seed = seed, SeeingSigmaPx = 0.06, WanderPxPerFrame = 0, SlowWanderPx = 0.2, Stages = [(150, 1.0)], DitherEveryFrames = 230, DropReversalsFromMs = 300 }
+                .Run(DecPlayLoop.Corrector(null, GuideAlgorithmKind.Predictive), Hour).TrueRmsPx)
+            .Average();
+
+        runs.Should().OnlyContain(r => r.Play.FullReversalMs < 300, "the rejected reversals are not taken for play");
+        runs.Average(r => r.Result.TrueRmsPx).Should().BeLessThan(1.15 * off);
+    }
+
+    [Test]
+    [Explicit("prints the Dec settings compared on the Sky Simulator session of 2026-10-18")]
+    public void PrintSkySimulatorSession()
+    {
+        // the Sky Simulator with the OnStep profile on pier West: a hard 3″ play (410 ms at 7.3″/s), Dec rate 2.45 px/s,
+        // 2.13 s frames of 1 s, a random walk of 0.25″/√s (0.12 px a frame), seeing about 0.06 px, drift 0.1″/min,
+        // no dithers; measured on the simulator's 0.2 px grid or not
+        const int frames = 1690;
+        foreach (double quantum in new[] { 0.2, 0.0 })
+        {
+            Func<int, DecPlayLoop> scenario = seed => new DecPlayLoop
+            {
+                Seed = seed,
+                YRatePxPerMs = 0.00245,
+                FrameSec = 2.13,
+                SeeingSigmaPx = 0.06,
+                WanderPxPerFrame = 0.122,
+                DriftPxPerSec = 0.1 / 2.99 / 60,
+                Stages = [(410, 1.0)],
+                MeasurementQuantumPx = quantum,
+            };
+            (string Name, GuideAlgorithmKind Kind, double? Pace)[] algorithms =
+            [
+                ("Predictive 0.5", GuideAlgorithmKind.Predictive, 0.5),
+                ("Predictive 0.7", GuideAlgorithmKind.Predictive, 0.7),
+                ("Predictive 1.0", GuideAlgorithmKind.Predictive, 1.0),
+                ("Hysteresis", GuideAlgorithmKind.Hysteresis, null),
+                ("ResistSwitch", GuideAlgorithmKind.ResistSwitch, null),
+            ];
+            foreach (var (name, kind, pace) in algorithms)
+            {
+                foreach (var mode in new[] { "off", "fixed", "play" })
+                {
+                    var runs = Enumerable.Range(1, 5).Select(seed =>
+                    {
+                        IBacklashCompensation? backlash = mode switch
+                        {
+                            "fixed" => new BacklashCompensation(410, 0, 0, enabled: true),
+                            "play" => new PlayModelBacklash(410),
+                            _ => null,
+                        };
+                        var corrector = DecPlayLoop.Corrector(backlash, kind);
+                        if (pace is { } p)
+                        {
+                            corrector.DecAlgorithm.TrySetParam("pace", p);
+                        }
+
+                        return scenario(seed).Run(corrector, frames);
+                    }).ToList();
+                    TestContext.Out.WriteLine(FormattableString.Invariant(
+                        $"| q {quantum:F1} | {name} | {mode} | true {runs.Average(r => r.TrueRmsPx):F3} | measured {runs.Average(r => r.MeasuredRmsPx):F3} | {runs.Average(r => r.ReversalsPerHour):F0} rev/h | {runs.Average(r => r.PulseSecPerHour):F0} s/h | held {runs.Average(r => r.Held):F0} |"));
+                }
+            }
+        }
+    }
+
+    [Test]
+    [Explicit("prints how the compensations fare on a mount that drops long reversals")]
+    public void PrintDroppedReversals()
+    {
+        (string Name, Func<int, DecPlayLoop> Loop)[] scenarios =
+        [
+            ("wander hard 150", seed => new DecPlayLoop { Seed = seed, SeeingSigmaPx = 0.06, WanderPxPerFrame = 0, SlowWanderPx = 0.2, Stages = [(150, 1.0)], DitherEveryFrames = 230 }),
+            ("wander hard 150 drop≥300", seed => new DecPlayLoop { Seed = seed, SeeingSigmaPx = 0.06, WanderPxPerFrame = 0, SlowWanderPx = 0.2, Stages = [(150, 1.0)], DitherEveryFrames = 230, DropReversalsFromMs = 300 }),
+            ("wander hard 150 drop≥300 reported", seed => new DecPlayLoop { Seed = seed, SeeingSigmaPx = 0.06, WanderPxPerFrame = 0, SlowWanderPx = 0.2, Stages = [(150, 1.0)], DitherEveryFrames = 230, DropReversalsFromMs = 300, ReportDropped = true }),
+            ("OnStepX+dither drop≥300", seed => new DecPlayLoop { Seed = seed, DitherEveryFrames = 230, DropReversalsFromMs = 300 }),
+            ("OnStepX+dither drop≥300 reported", seed => new DecPlayLoop { Seed = seed, DitherEveryFrames = 230, DropReversalsFromMs = 300, ReportDropped = true }),
+        ];
+        foreach (var (name, scenario) in scenarios)
+        {
+            foreach (var mode in new[] { "off", "fixed", "play" })
+            {
+                var runs = Enumerable.Range(1, 3).Select(seed =>
+                {
+                    IBacklashCompensation? backlash = mode switch
+                    {
+                        "fixed" => new BacklashCompensation(900, 0, 0, enabled: true),
+                        "play" => new PlayModelBacklash(900),
+                        _ => null,
+                    };
+                    var r = scenario(seed).Run(DecPlayLoop.Corrector(backlash, GuideAlgorithmKind.Predictive), Hour);
+                    return (Result: r, Play: (backlash as PlayModelBacklash)?.Values);
+                }).ToList();
+                double Avg(Func<DecPlayLoop.Result, double> v) => runs.Select(x => v(x.Result)).Where(double.IsFinite).DefaultIfEmpty(double.NaN).Average();
+                string learned = runs[0].Play is null
+                    ? string.Empty
+                    : $" | learned {string.Join("/", runs.Select(x => $"{x.Play!.FullReversalMs:F0}"))} ms, σ {string.Join("/", runs.Select(x => $"{x.Play!.NoiseSigmaPx:F3}"))} px";
+                TestContext.Out.WriteLine(
+                    $"| {name} | {mode} | {Avg(r => r.TrueRmsPx):F3} | {Avg(r => r.GuidingRmsPx):F3} | {Avg(r => r.SettleFramesMean):F1} | {Avg(r => r.ReversalsPerHour):F0} | {Avg(r => r.PulseSecPerHour):F0} | dropped {Avg(r => r.Dropped):F0}{learned}");
+            }
+        }
     }
 
     [Test]

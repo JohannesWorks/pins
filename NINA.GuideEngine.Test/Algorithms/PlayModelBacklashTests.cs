@@ -18,7 +18,12 @@ public class PlayModelBacklashTests
     /// </summary>
     private static PlayModelBacklash Learned(double playMs, int pulseMs = 200, int runPulses = 6, int frames = 400, double prior = 900)
     {
-        var play = new PlayModelBacklash(prior);
+        return Learn(new PlayModelBacklash(prior), playMs, pulseMs, runPulses, frames);
+    }
+
+    // continues driving a model, e.g. one that learned another play before
+    private static PlayModelBacklash Learn(PlayModelBacklash play, double playMs, int pulseMs = 200, int runPulses = 6, int frames = 400)
+    {
         double gap = 0, moved = 0;
         var direction = GuideDirection.South;
         for (int f = 0; f < frames; f++)
@@ -63,6 +68,18 @@ public class PlayModelBacklashTests
         var play = Learned(0);
         play.Values.FullReversalMs.Should().BeLessThan(PlayModelBacklash.GateMinSlackMs);
         play.Values.Shape.Should().Be("None");
+    }
+
+    // a model sure there is no play expects no slack at a reversal; it still has to measure the take-up, or a play that
+    // appears later (a slew, the load on the gear) is never learned
+    [Test]
+    public void APlayThatAppearsAfterNoPlayWasLearnedIsLearned()
+    {
+        var play = Learned(0);
+        play.Values.FullReversalMs.Should().BeLessThan(PlayModelBacklash.GateMinSlackMs);
+
+        Learn(play, 400, 100);
+        play.Values.FullReversalMs.Should().BeApproximately(400, 40);
     }
 
     [Test]
