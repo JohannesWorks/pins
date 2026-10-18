@@ -232,3 +232,29 @@ model with the old gate (0.157 and 0.165 against 0.192 without the grid); with t
 0.158–0.166 without having been told the size. The Predictive correction pace mattered little: 0.7 against 0.5 gained
 about 3 %.
 
+## 8. A limit above the measured size (OnStepX, 2026-10-18)
+
+The first night with the play model on the OnStepX (Dec soft, about 4 s from the calibration's return; the fit cannot go
+above the largest of `BaseWidthsMs`, 4000 ms, although the return lost about 6 s) guided Dec at 0.53″ RMS over 64
+minutes. The learned full reversal swung between 1.1 and 8 s: it rose in every run of pulses one way after which the star
+stayed where it was (frames 1119–1139: 3.2 s of North pulses, 10 px expected, the offset stayed at −0.2 px; after Dec
+dithers up to 8 s, the top of the grid), and fell in the alternating corrections that followed. The gear is never fully
+engaged while guiding: at the dithers, RA moved 0.85–1.24 × its calibrated distance and Dec 0.13–0.61 ×, also after a
+pulse the same way.
+
+The high values cost the most: grouped by the size the model held, outside settling,
+
+| Learned full reversal | Frames | Dec RMS | Reversals that overshot by > 0.3 px |
+|---|---|---|---|
+| < 3 s | 1659 | 0.40–0.48″ | 13 % |
+| 3–4.5 s | 1831 | 0.41″ | 11 % |
+| > 4.5 s | 606 | 0.91″ | 53 % |
+
+with 25 reversal pulses at the 2500 ms limit above 4.5 s and none below. With a measured size (a calibration's or the
+probe's after a slew) the sizes above the grid size nearest to `MaxGrowthOverMeasured` = 1.2 × it (1.09–1.30 × it, as the grid steps
+are 19 %; exactly 1.2 × could leave no size above the measured one) now keep no weight whatever the evidence; smaller sizes stay free, as an undershoot is cheap, and an unmeasured play is not limited. A
+restored model takes the measured size from its stored calibrated shape (its mean width), so the limit and the prior
+survive a restart; before, the prior was built around the "Dec backlash pulse" setting. Replaying the night's Dec
+offsets and pulses through the model (open loop, so the pulses are the night's): without the limit 10/50/90 % of the
+frames held 1.3/3.1/5.4 s and 14 % more than 4.5 s, with it 1.9/3.2/4.5 s, at most 4.76 s. Whether the overshoots go with
+it is for the next night to show.

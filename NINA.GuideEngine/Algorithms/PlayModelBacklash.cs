@@ -117,10 +117,21 @@ public sealed class PlayModelBacklash : IBacklashCompensation
     /// <summary>Largest compensation added to one pulse (ms); the rest is taken up by the next pulses.</summary>
     public const int MaxCompensationMs = 8000;
 
+    /// <summary>
+    /// How far above a measured size (a calibration's or a probe's) the learned size may go, about one step of
+    /// <see cref="SizesMs"/> (<see cref="SizeLimitMs"/>).
+    /// A soft play that guiding never crosses tells only that it is wider than the travel so far, and runs of pulses one way
+    /// pushed the posterior to the top of the grid (8 s against 4 s measured on the OnStepX of 2026-10-18: above 4.5 s half
+    /// the reversals overshot, against 12 % below, and the Dec RMS doubled); a new measurement (the probe after a slew) moves
+    /// the limit. Smaller sizes are not limited: an undershoot is cheap.
+    /// </summary>
+    public const double MaxGrowthOverMeasured = 1.2;
+
     private readonly ReversalGate gate;
     private Hypothesis[] hypotheses = [];
     private double[] logPrior = [];
     private double[] logPosterior = [];
+    private bool[] aboveLimit = [];
     private double[]? calibratedWeights;
     private bool stateKnown;
     private GuideDirection? lastDirection;
@@ -159,6 +170,12 @@ public sealed class PlayModelBacklash : IBacklashCompensation
 
     /// <summary>True when a calibration measured a shape of the play (<see cref="SeedFromCalibration"/>).</summary>
     public bool ShapeFromCalibration => calibratedWeights is not null;
+
+    /// <summary>
+    /// Largest size the posterior may learn (ms): the size of the grid nearest to <see cref="MaxGrowthOverMeasured"/> × a
+    /// measured size (so 1.09–1.30 × it, never without a size above it), else no limit.
+    /// </summary>
+    public double SizeLimitMs => ShapeFromCalibration ? LimitAbove(PriorFullReversalMs) : double.PositiveInfinity;
 
     public GuideDirection? LastDirection => lastDirection;
 
@@ -273,12 +290,19 @@ public sealed class PlayModelBacklash : IBacklashCompensation
             return false;
         }
 
+        if (weights is not null)
+        {
+            // the size a calibration measured is the calibrated shape's mean width (SeedFromCalibration)
+            PriorFullReversalMs = Math.Max(1, weights.Select((w, i) => w * BaseWidthsMs[i]).Sum());
+        }
+
         Build(weights);
         for (int k = 0; k < logPosterior.Length; k++)
         {
             logPosterior[k] = double.IsFinite(stored.LogPosterior[k]) ? stored.LogPosterior[k] : -1e6;
         }
 
+        ExcludeAboveLimit();
         LearnedWindows = Math.Max(0, stored.LearnedWindows);
         ResetState();
         return true;
@@ -524,8 +548,11 @@ public sealed class PlayModelBacklash : IBacklashCompensation
         }
 
         hypotheses = [.. list];
+        double limit = calibrated is null ? double.PositiveInfinity : LimitAbove(PriorFullReversalMs);
+        aboveLimit = hypotheses.Select(h => h.SizeMs > limit * (1 + 1e-9)).ToArray();
         logPrior = prior.Select(p => Math.Log(Math.Max(p, 1e-300))).ToArray();
         logPosterior = (double[])logPrior.Clone();
+        ExcludeAboveLimit();
         stateKnown = false;
         lastDirection = null;
         window = null;
@@ -548,6 +575,28 @@ public sealed class PlayModelBacklash : IBacklashCompensation
         for (int k = 0; k < hypotheses.Length; k++)
         {
             logPosterior[k] = logPrior[k] + evidence.GetValueOrDefault((hypotheses[k].Shape, hypotheses[k].SizeMs));
+        }
+
+        ExcludeAboveLimit();
+    }
+
+    // the grid's steps are 19 %: a limit of exactly 1.2 × the measured size could leave no size above the measured one
+    private static double LimitAbove(double measuredMs)
+    {
+        double target = Math.Log(MaxGrowthOverMeasured * measuredMs);
+        return SizesMs.MinBy(s => Math.Abs(Math.Log(s) - target));
+    }
+
+    // the sizes above SizeLimitMs keep no weight, whatever the evidence: a small prior alone would be outgrown by a few
+    // windows that fit a wider play better
+    private void ExcludeAboveLimit()
+    {
+        for (int k = 0; k < logPosterior.Length; k++)
+        {
+            if (aboveLimit[k])
+            {
+                logPosterior[k] = -1e6;
+            }
         }
     }
 
@@ -637,6 +686,7 @@ public sealed class PlayModelBacklash : IBacklashCompensation
             logPosterior[k] = logPrior[k] + Forgetting * (logPosterior[k] - logPrior[k]) + logLikelihood;
         }
 
+        ExcludeAboveLimit();
         LearnedWindows = Forgetting * LearnedWindows + 1;
         LearnCount++;
         double max = logPosterior.Max();

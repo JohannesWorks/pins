@@ -239,6 +239,86 @@ public class PlayModelBacklashTests
         play.Values.FullReversalMs.Should().Be(before);
     }
 
+    // a model seeded by a calibration's return of the soft play of DecPlayLoop (about 1.6 s), the gear engaged South
+    private static PlayModelBacklash Calibrated()
+    {
+        var loop = new DecPlayLoop();
+        var play = new PlayModelBacklash(900);
+        play.SeedFromCalibration(loop.CalibrationTakeUp(800, 8), loop.YRatePxPerMs).Should().BeTrue();
+        play.GearEngaged(GuideDirection.South);
+        return play;
+    }
+
+    // runs of pulses one way after which the star stays where it was, as Dec guided on the OnStepX of 2026-10-18 (frames
+    // 1119-1139: 3.2 s of North pulses, 10 px expected, the offset stayed at -0.2 px)
+    private static void StuckRuns(PlayModelBacklash play, int runs, int pulsesPerRun = 20, int pulseMs = 160)
+    {
+        var direction = GuideDirection.South;
+        for (int r = 0; r < runs; r++)
+        {
+            direction = direction == GuideDirection.South ? GuideDirection.North : GuideDirection.South;
+            double offset = direction == GuideDirection.North ? -0.2 : 0.2;
+            for (int f = 0; f < pulsesPerRun; f++)
+            {
+                play.TrackResults(MoveOptions.GuideStep, offset + (f % 2 == 0 ? 0.03 : -0.03), 0, Rate);
+                play.PulseSent(direction, pulseMs);
+            }
+        }
+    }
+
+    [Test]
+    public void RunsThatNeverCrossThePlayDoNotPushTheSizeFarAboveTheMeasuredOne()
+    {
+        var play = Calibrated();
+        double measured = play.PriorFullReversalMs;
+
+        StuckRuns(play, 12);
+
+        play.LearnCount.Should().BeGreaterThan(10);
+        // the grid size nearest to 1.2 × the measured one, at most half a grid step (2^(1/8)) off
+        play.SizeLimitMs.Should().BeInRange(1.09 * measured, 1.31 * measured);
+        play.Values.FullReversalMs.Should().BeLessThanOrEqualTo(play.SizeLimitMs);
+    }
+
+    [Test]
+    public void WithoutAMeasurementTheSizeIsNotLimited()
+    {
+        var play = new PlayModelBacklash(900);
+        play.SizeLimitMs.Should().Be(double.PositiveInfinity);
+
+        StuckRuns(play, 12);
+
+        play.Values.FullReversalMs.Should().BeGreaterThan(PlayModelBacklash.MaxGrowthOverMeasured * 900,
+            "the same runs push an unmeasured play far up, which is what the limit stops");
+    }
+
+    [Test]
+    public void AWiderPlayThanMeasuredIsStillLearnedUpToTheLimit()
+    {
+        var play = Calibrated();
+        double measured = play.PriorFullReversalMs;
+
+        Learn(play, 1.3 * measured, pulseMs: 400, runPulses: 8);
+
+        play.Values.FullReversalMs.Should().BeGreaterThan(1.08 * measured);
+        play.Values.FullReversalMs.Should().BeLessThanOrEqualTo(play.SizeLimitMs);
+    }
+
+    [Test]
+    public void TheMeasuredSizeAndItsLimitSurviveAStoreAndRestore()
+    {
+        var play = Calibrated();
+        StuckRuns(play, 4);
+        var state = play.State(DateTimeOffset.UnixEpoch);
+
+        var restored = new PlayModelBacklash(900);
+        restored.Restore(state).Should().BeTrue();
+
+        restored.PriorFullReversalMs.Should().BeApproximately(play.PriorFullReversalMs, 1e-6);
+        restored.SizeLimitMs.Should().BeApproximately(play.SizeLimitMs, 1e-6);
+        restored.Values.FullReversalMs.Should().BeApproximately(play.Values.FullReversalMs, 1);
+    }
+
     [Test]
     public void TheCorrectorHoldsANoiseReversalAndSendsNoDecPulse()
     {
