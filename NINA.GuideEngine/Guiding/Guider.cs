@@ -1219,6 +1219,11 @@ public sealed partial class Guider : IAsyncDisposable
 
             Emit(new CalibrationCompleteEvent(now, MountName, result));
             Emit(new CalibrationUpdatedEvent(now, result, settings.DecFlipRequired));
+
+            // what the Dec algorithm learned with the previous calibration may come from corrections in the wrong direction
+            // (pins log 2026-10-19: after a Dec runaway Predictive kept a wander of 30 and a gain of 0.97 learned from
+            // errors of 270 px, and chased the seeing with every frame)
+            corrector.DecAlgorithm.Reset();
             PlayModelCalibrated(result, snapshot, now);
             var adj = AdjustCalibration(result, snapshot);
             EnterGuiding(starPosition.IsValid ? starPosition : lastStarPosition, adj, now);
@@ -1479,17 +1484,21 @@ public sealed partial class Guider : IAsyncDisposable
                     int raMs = SignedMs(corr.RADuration, corr.RADirection);
                     int decMs = decObserved ? 0 : SignedMs(corr.DECDuration, corr.DECDirection);
                     var verdict = runaway.Record(now, mountOfs.X, raMs, decObserved ? 0 : mountOfs.Y, decMs, out var axis);
-                    if (verdict == SafetyVerdict.Runaway && axis == GuideAxis.Dec && flipTime is { } ft && now - ft < FlipRunawayWindow && !flipInverted
-                        && settings.VerifyDecAfterFlip)
+                    if (verdict == SafetyVerdict.Runaway && axis == GuideAxis.Dec && runaway.Cause == RunawayCause.ErrorGrowing
+                        && flipTime is { } ft && now - ft < FlipRunawayWindow && !flipInverted && settings.VerifyDecAfterFlip)
                     {
-                        // shortly after a meridian flip a Dec runaway is almost certainly a wrong Dec-flip setting:
-                        // invert Dec once instead of stopping; a second runaway stops guiding
+                        // shortly after a meridian flip a Dec error that keeps growing is almost certainly a wrong Dec-flip
+                        // setting: invert Dec once instead of stopping; a second runaway stops guiding. A runaway on the
+                        // pulse duty alone is no such evidence: Dec corrections swinging between North and South (a play
+                        // taken up on every reversal) keep the error small, and inverting then breaks a right setting
                         InvertDecAfterFlip(now);
                         corrPulses.RemoveAll(p => p.Direction.Axis() == GuideAxis.Dec);
                         runaway.Reset();
                     }
                     else if (verdict == SafetyVerdict.Runaway)
                     {
+                        // what the axis' algorithm learned while the corrections ran away does not describe the mount
+                        (axis == GuideAxis.Dec ? corrector.DecAlgorithm : corrector.RaAlgorithm).Reset();
                         Fail(GuideErrorCode.RunawayDetected, $"{axis} axis");
                         return r;
                     }

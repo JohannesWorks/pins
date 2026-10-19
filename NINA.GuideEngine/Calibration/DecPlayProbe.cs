@@ -102,6 +102,12 @@ public sealed class DecPlayProbe
 
     public string? FailureReason { get; private set; }
 
+    /// <summary>
+    /// True when the probe failed because its North pulses moved the star South by several steps: the calibration's Dec
+    /// direction does not fit the mount (a wrong Dec-flip setting after a meridian flip, or a stale calibration).
+    /// </summary>
+    public bool DecReversed { get; private set; }
+
     /// <summary>What the probe is doing, for the status line.</summary>
     public string Status => Phase switch
     {
@@ -161,6 +167,7 @@ public sealed class DecPlayProbe
         if (decPx <= -EngagedMoves * expected)
         {
             // North pulses moving the star South: the calibration does not fit this pointing
+            DecReversed = true;
             return Fail("North pulses moved the star South");
         }
 

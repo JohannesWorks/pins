@@ -313,3 +313,35 @@ In `PrintComparison` only the cases without play changed (play model, RMS / reve
 
 Every case with a play is unchanged to the third digit; Hysteresis on "OnStepX varying + dither" has the same RMS at 76
 reversals an hour instead of 47.
+
+## 10. A wrong Dec-flip setting after the flip (OnStepX, 2026-10-18/19)
+
+On 2026-10-18 at 21:08 the flip West → East was handled right (`DecFlipRequired` true, the measurement after the slew found
+the play). Ten minutes later, after a dither, the play model swung Dec between 2.5 s pulses North and South for offsets of
+±0.3 px (the take-up limit cycle fixed in §8). That tripped the runaway detector's pulse duty (more than half of 60 s),
+and a Dec runaway within 15 minutes of a flip was taken as a wrong Dec-flip setting: Dec was inverted, the now wrong
+setting saved, and guiding ran away at once. On 2026-10-19, back on pier West, the East calibration was flipped with that
+setting: the measurement after the slew reported "North pulses moved the star South", guiding started anyway and Dec ran
+away by 270 px. After the recalibration Predictive Dec kept what it had learned from those frames (wander 30, gain 0.97,
+seeing 2 px instead of 0.1 px) and corrected the seeing on every frame.
+
+Now:
+
+- `DecPlayProbe.DecReversed` marks that failure. With a flipped calibration and the post-flip self-check on, the guider
+  inverts Dec (saving the setting, alert `DecFlipCorrected`) and measures again; the second measurement confirms the
+  direction, and the self-check does not invert back later. Otherwise, or when it is still reversed, the mount is
+  calibrated again (alert `CalibrationInvalidated`) instead of guiding with a Dec that pushes away.
+- `RunawayDetector.Cause` tells a growing error from the pulse duty; only a growing Dec error inverts Dec after a flip.
+  A duty runaway still stops guiding.
+- A completed calibration resets the Dec algorithm, and a runaway resets the algorithm of its axis.
+- The play depends on the pier side here. After the flip of 21:05 (Dec inverted by the self-check, the measurement had
+  failed) the model kept the "none" it had learned on pier West: in eight minutes, 21 reversals and Dec RMS rising to
+  1.1″, it learned nothing, since the windows of reversals where it expects no play weigh 0.1 (§9). The same 551 frames
+  replayed into a fresh model (`PlayModelGuideLogReplay`) give 4595 ms (Soft); the West session of 20:11 gives 24 ms
+  (None). When the measurement after a pier-side change does not seed the model, `PlayModelBacklash.ForgetLearned` now
+  takes it back to its prior (a calibration's shape and size stay).
+
+Tests: `ClosedLoopTests.Play_probe_after_the_flip_inverts_a_wrong_dec_flip_setting`,
+`Play_probe_calibrates_again_when_dec_moves_the_wrong_way_and_may_not_be_inverted`,
+`Pulse_duty_runaway_after_a_flip_does_not_invert_dec`, `Play_learned_on_the_other_pier_side_is_forgotten_when_the_probe_fails`;
+`PlayModelBacklashTests.ForgettingWhatWasLearnedGoesBackToThePriorAndKeepsTheMeasuredShape`.

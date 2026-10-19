@@ -517,6 +517,18 @@ public sealed class PlayModelBacklash : IBacklashCompensation
         gate.ResetEvidence();
     }
 
+    /// <summary>
+    /// Forgets what was learned: the posterior goes back to the prior, which keeps a calibration's shape and size. For a
+    /// play that may differ by far now, e.g. on the other pier side (OnStepX 2026-10-19: no play learned on pier West,
+    /// 4.6 s on pier East, where the model kept the West's "none" and learned nothing in eight minutes).
+    /// </summary>
+    public void ForgetLearned()
+    {
+        Array.Copy(logPrior, logPosterior, logPrior.Length);
+        LearnedWindows = 0;
+        LearnCount++;
+    }
+
     public void ResetState()
     {
         foreach (var h in hypotheses)

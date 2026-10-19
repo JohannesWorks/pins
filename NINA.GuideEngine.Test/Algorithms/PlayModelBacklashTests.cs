@@ -224,6 +224,25 @@ public class PlayModelBacklashTests
     }
 
     [Test]
+    public void ForgettingWhatWasLearnedGoesBackToThePriorAndKeepsTheMeasuredShape()
+    {
+        var loop = new DecPlayLoop();
+        var play = new PlayModelBacklash(900);
+        play.SeedFromCalibration(loop.CalibrationTakeUp(800, 8), loop.YRatePxPerMs).Should().BeTrue();
+        double prior = play.Values.FullReversalMs;
+        Learn(play, 0);
+        play.Values.FullReversalMs.Should().BeLessThan(PlayModelBacklash.GateMinSlackMs, "no play was learned");
+        int learnCount = play.LearnCount;
+
+        play.ForgetLearned();
+
+        play.Values.FullReversalMs.Should().BeApproximately(prior, 1);
+        play.Values.Shape.Should().Be("Calibrated");
+        play.LearnedWindows.Should().Be(0);
+        play.LearnCount.Should().BeGreaterThan(learnCount, "the host stores the forgotten state");
+    }
+
+    [Test]
     public void TooFewCalibrationPointsChangeNothing()
     {
         var play = new PlayModelBacklash(900);

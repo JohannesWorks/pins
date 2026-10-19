@@ -20,7 +20,10 @@ public sealed partial class Guider
     private DecPlayProbe? playProbe;
     private CalibrationAdjustment? playProbeAdjustment;
     private GuidePoint playProbeStart = GuidePoint.Invalid;
+    private GuidePoint playProbeOrigin = GuidePoint.Invalid;
     private int playProbeLostFrames;
+    private bool playProbeInvertedDec;
+    private PierSide playProbePreviousPier = PierSide.Unknown;
     private MountSnapshot? playMeasuredAt;
 
     /// <summary>The play model's values (also while the fixed compensation is in use). Loop thread only (tests and diagnostics).</summary>
@@ -92,13 +95,23 @@ public sealed partial class Guider
         }
 
         UseCalibration(adj);
+        playProbeInvertedDec = false;
+        playProbePreviousPier = playMeasuredAt?.PierSide ?? PierSide.Unknown;
+        playProbeStart = starPosition;
+        SetState(GuiderState.Calibrating);
+        pulses = BeginPlayProbe(adj, starPosition, snapshot, now);
+        return true;
+    }
+
+    // a measurement from the star's current position; guiding later locks on playProbeStart
+    private IReadOnlyList<PulseCommand> BeginPlayProbe(CalibrationAdjustment adj, GuidePoint starPosition, MountSnapshot snapshot,
+        DateTimeOffset now)
+    {
         playProbe = new DecPlayProbe(adj.Calibration.YRate, settings.MaxDecDurationMs, PlayModelBacklash.SizesMs[^1]);
         playProbeAdjustment = adj;
-        playProbeStart = starPosition;
+        playProbeOrigin = starPosition;
         playProbeLostFrames = 0;
-        SetState(GuiderState.Calibrating);
-        pulses = PlayProbeStep(starPosition, snapshot, now);
-        return true;
+        return PlayProbeStep(starPosition, snapshot, now);
     }
 
     private bool PlayProbeNeeded(CalibrationData cal, MountSnapshot snapshot)
@@ -125,7 +138,7 @@ public sealed partial class Guider
             {
                 // guiding takes over the search for the star; the gear's position stays unknown
                 playProbe!.Abort("star lost");
-                EndPlayProbe(snapshot, now);
+                pulses = EndPlayProbe(lastStarPosition, snapshot, now);
             }
 
             return r;
@@ -140,7 +153,7 @@ public sealed partial class Guider
     private IReadOnlyList<PulseCommand> PlayProbeStep(GuidePoint starPosition, MountSnapshot snapshot, DateTimeOffset now)
     {
         var probe = playProbe!;
-        double decPx = transform!.CameraToMount(starPosition - playProbeStart).Y;
+        double decPx = transform!.CameraToMount(starPosition - playProbeOrigin).Y;
         var pulse = probe.Update(decPx);
         if (pulse is { } p)
         {
@@ -159,23 +172,47 @@ public sealed partial class Guider
 
         if (probe.Phase is DecPlayProbePhase.Measured or DecPlayProbePhase.Failed)
         {
-            EndPlayProbe(snapshot, now);
+            return EndPlayProbe(starPosition, snapshot, now);
         }
 
         return [];
     }
 
-    // the measurement ended: guiding starts on the star's original position, the play model seeded from the return
-    private void EndPlayProbe(MountSnapshot snapshot, DateTimeOffset now)
+    // the measurement ended: guiding starts on the star's original position, the play model seeded from the return. A probe
+    // whose North pulses moved the star South found the calibration's Dec direction wrong: Dec is inverted (after a meridian
+    // flip) and measured again, or the mount is calibrated again; guiding with it would push Dec away (pins log
+    // 2026-10-19: the probe said so, guiding started anyway and ran away by 270 px)
+    private IReadOnlyList<PulseCommand> EndPlayProbe(GuidePoint starPosition, MountSnapshot snapshot, DateTimeOffset now)
     {
         var probe = playProbe!;
         var adj = playProbeAdjustment!;
         CancelPlayProbe();
         playMeasuredAt = snapshot;
 
+        if (probe.DecReversed)
+        {
+            return PlayProbeFoundDecReversed(probe, adj, starPosition, snapshot, now);
+        }
+
         bool measured = probe.Phase == DecPlayProbePhase.Measured;
         bool seeded = measured && playBacklash.SeedFromCalibration(probe.TakeUp, probe.RatePxPerMs);
+        bool forgotten = false;
+        if (!seeded && playProbePreviousPier != PierSide.Unknown && snapshot.PierSide != PierSide.Unknown && snapshot.PierSide != playProbePreviousPier)
+        {
+            // the play was learned on the other pier side and could not be measured on this one: start from the prior
+            playBacklash.ForgetLearned();
+            forgotten = true;
+        }
+
         EnterGuiding(playProbeStart, adj, now);
+        if (playProbeInvertedDec)
+        {
+            // the probe already inverted Dec after the flip, and the second measurement confirmed it: the post-flip self-check
+            // has nothing left to find, and a later runaway is not a reason to invert back
+            decFlip.Reset();
+            flipInverted = true;
+        }
+
         if (measured)
         {
             // the return's last pulses moved the star South
@@ -188,12 +225,42 @@ public sealed partial class Guider
         string message = !measured ? $"Dec play not measured after the slew: {probe.FailureReason}"
             : seeded ? $"Dec play measured after the slew: North {probe.NorthMs} ms, South {probe.SouthMs} ms, gear engaged South{rate}"
             : $"Dec play after the slew: gear engaged South (North {probe.NorthMs} ms, South {probe.SouthMs} ms), the return too short to fit the play{rate}";
+        if (forgotten)
+        {
+            message += "; what was learned on the other pier side is forgotten";
+        }
+
         Emit(new DecPlayProbeEvent(now, seeded, message));
-        if (seeded)
+        if (seeded || forgotten)
         {
             playBacklashLearnCount = -1;
             EmitPlayModelLearned(now);
         }
+
+        return [];
+    }
+
+    private IReadOnlyList<PulseCommand> PlayProbeFoundDecReversed(DecPlayProbe probe, CalibrationAdjustment adj, GuidePoint starPosition,
+        MountSnapshot snapshot, DateTimeOffset now)
+    {
+        if (adj.Flipped && settings.VerifyDecAfterFlip && !playProbeInvertedDec)
+        {
+            // the calibration was flipped for this pier side with the wrong Dec-flip setting: invert Dec (saving the setting)
+            // and measure again, which confirms the new direction. The North pulses engaged the gear North
+            Emit(new DecPlayProbeEvent(now, false, $"Dec play not measured after the slew: {probe.FailureReason}; Dec inverted for the flipped calibration"));
+            playProbeInvertedDec = true;
+            InvertDecAfterFlip(now);
+            playBacklash.GearEngaged(GuideDirection.North);
+            return BeginPlayProbe(adjustment!, starPosition, snapshot, now);
+        }
+
+        // not explained by a flip, or still wrong after inverting: the calibration does not fit the mount
+        Emit(new DecPlayProbeEvent(now, false, $"Dec play not measured after the slew: {probe.FailureReason}; calibrating again"));
+        Alert(GuideErrorCode.CalibrationInvalidated, "North pulses moved the star South: the calibration's Dec direction does not fit the mount");
+        playBacklash.ResetState();
+        corrector.DecAlgorithm.Reset();
+        StartCalibration(starPosition, snapshot, now, out var pulses);
+        return pulses;
     }
 
     private void CancelPlayProbe()
