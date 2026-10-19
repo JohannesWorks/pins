@@ -345,3 +345,18 @@ Tests: `ClosedLoopTests.Play_probe_after_the_flip_inverts_a_wrong_dec_flip_setti
 `Play_probe_calibrates_again_when_dec_moves_the_wrong_way_and_may_not_be_inverted`,
 `Pulse_duty_runaway_after_a_flip_does_not_invert_dec`, `Play_learned_on_the_other_pier_side_is_forgotten_when_the_probe_fails`;
 `PlayModelBacklashTests.ForgettingWhatWasLearnedGoesBackToThePriorAndKeepsTheMeasuredShape`.
+
+## 11. Plays wider than 4 s (OnStepX pier East, 2026-10-19)
+
+The probe after the slew of 21:45 returned through 8354 ms South, yet the model started at 3711 ms and then stayed at
+4757 ms for most of the session, with 2.5 s compensations at ±0.3 px that overshot by up to 3 px. A calibration's or a
+probe's fit is a mix of `BaseWidthsMs`, so the widest operator (4000 ms) bounded the size it could measure: hard or soft
+plays of 4–8 s all came out as a 4000 ms size (3711 ms as the posterior's mean), and the limit above a measured size (§8)
+kept the learned size at 4757 ms. The 19:56 calibration on pier West had hit the same bound.
+
+`BaseWidthsMs` now goes on to 6000 and 8000 ms (`SizesMs` already reached 8000). A width the longest return pulse did
+not get past moves nothing in the points and only stands in for a lower rate: with it a probe at half the calibrated
+rate measured a 1.1 s play as 1.6 s (`DecPlayProbeTests.MeasuresThePlayThroughSeeing(0.5)`). The fit therefore takes the
+widths up to 4000 ms, as before, and the wider ones only when the return got past them. States stored with ten weights
+are restored with zeros for the new widths. Tests: `PlayModelBacklashTests.AReturnThroughAPlayWiderThanFourSecondsMeasuresItsSize`,
+`AStateStoredWithTheFirstTenWidthsIsRestored`.

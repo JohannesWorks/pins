@@ -354,6 +354,41 @@ public class PlayModelBacklashTests
         restored.Values.FullReversalMs.Should().BeApproximately(play.Values.FullReversalMs, 1);
     }
 
+    // the OnStepX on pier East (2026-10-19): plays of 5–8 s were all measured as 4 s, the widest operator then
+    [TestCase(5000)]
+    [TestCase(6000)]
+    [TestCase(8000)]
+    public void AReturnThroughAPlayWiderThanFourSecondsMeasuresItsSize(double playMs)
+    {
+        var points = new List<NINA.GuideEngine.Calibration.DecTakeUpPoint>();
+        for (int t = 600; t <= playMs + 3000; t += 600)
+        {
+            points.Add(new(t, Math.Max(0, t - playMs) * Rate));
+        }
+
+        var play = new PlayModelBacklash(900);
+        play.SeedFromCalibration(points, Rate).Should().BeTrue();
+
+        play.PriorFullReversalMs.Should().BeApproximately(playMs, 0.1 * playMs);
+        play.SizeLimitMs.Should().BeGreaterThanOrEqualTo(playMs, "8000 ms is the widest size");
+    }
+
+    [Test]
+    public void AStateStoredWithTheFirstTenWidthsIsRestored()
+    {
+        var play = Calibrated();
+        StuckRuns(play, 4);
+        var state = play.State(DateTimeOffset.UnixEpoch)!;
+        state.CalibratedWeights![10..].Should().OnlyContain(w => w == 0, "the calibration's play is narrower than 6000 ms");
+        var old = state with { CalibratedWeights = state.CalibratedWeights[..10] };
+
+        var restored = new PlayModelBacklash(900);
+        restored.Restore(old).Should().BeTrue();
+
+        restored.PriorFullReversalMs.Should().BeApproximately(play.PriorFullReversalMs, 1e-6);
+        restored.Values.FullReversalMs.Should().BeApproximately(play.Values.FullReversalMs, 1);
+    }
+
     [Test]
     public void TheCorrectorHoldsANoiseReversalAndSendsNoDecPulse()
     {

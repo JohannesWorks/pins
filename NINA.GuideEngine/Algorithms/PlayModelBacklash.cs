@@ -73,8 +73,13 @@ public sealed record PlayModelState
 /// </remarks>
 public sealed class PlayModelBacklash : IBacklashCompensation
 {
-    /// <summary>Widths of the play operators the shapes are made of (ms, before scaling to a size).</summary>
-    public static readonly IReadOnlyList<double> BaseWidthsMs = [0, 100, 200, 400, 700, 1000, 1500, 2000, 3000, 4000];
+    /// <summary>
+    /// Widths of the play operators the shapes are made of (ms, before scaling to a size). A calibration's or a probe's fit
+    /// is a mix of them, so the widest one bounds the size it can measure: up to 4000 ms the OnStepX's 5–8 s on pier East
+    /// (2026-10-19) were all measured as 4 s, and the limit above the measured size kept the model below 4.8 s. A stored
+    /// state with fewer weights (the first ten) gets zeros for the wider ones.
+    /// </summary>
+    public static readonly IReadOnlyList<double> BaseWidthsMs = [0, 100, 200, 400, 700, 1000, 1500, 2000, 3000, 4000, 6000, 8000];
 
     /// <summary>Sizes of the full reversal the hypotheses span (ms): 62.5 … 8000 in steps of 2^(1/4).</summary>
     public static readonly IReadOnlyList<double> SizesMs = Enumerable.Range(0, 29).Select(k => 62.5 * Math.Pow(2, k / 4.0)).ToArray();
@@ -82,9 +87,9 @@ public sealed class PlayModelBacklash : IBacklashCompensation
     /// <summary>The shapes every size is tried with (weights of <see cref="BaseWidthsMs"/>).</summary>
     public static readonly IReadOnlyList<(string Name, double[] Weights)> Shapes =
     [
-        ("Hard", [0, 0, 0, 0, 0, 1, 0, 0, 0, 0]),
-        ("Medium", [0, 0, 0, 0, 1 / 3.0, 1 / 3.0, 1 / 3.0, 0, 0, 0]),
-        ("Soft", [0, 1 / 7.0, 1 / 7.0, 1 / 7.0, 1 / 7.0, 1 / 7.0, 1 / 7.0, 1 / 7.0, 0, 0]),
+        ("Hard", [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]),
+        ("Medium", [0, 0, 0, 0, 1 / 3.0, 1 / 3.0, 1 / 3.0, 0, 0, 0, 0, 0]),
+        ("Soft", [0, 1 / 7.0, 1 / 7.0, 1 / 7.0, 1 / 7.0, 1 / 7.0, 1 / 7.0, 1 / 7.0, 0, 0, 0, 0]),
     ];
 
     /// <summary>Prior probability of the no-play hypothesis.</summary>
@@ -289,7 +294,7 @@ public sealed class PlayModelBacklash : IBacklashCompensation
             return false;
         }
 
-        var weights = stored.CalibratedWeights is { } w ? Normalised(w) : null;
+        var weights = stored.CalibratedWeights is { } w ? Normalised(Padded(w)) : null;
         int expected = 1 + SizesMs.Count * (Shapes.Count + (weights is null ? 0 : 1));
         if (stored.LogPosterior.Length != expected || stored.LogPosterior.Any(double.IsNaN) || !stored.LogPosterior.Any(double.IsFinite))
         {
@@ -334,16 +339,22 @@ public sealed class PlayModelBacklash : IBacklashCompensation
             return false;
         }
 
-        // from a gear engaged the other way the play of operator i is its whole width
-        int n = BaseWidthsMs.Count;
-        var a = usable.Select(p => BaseWidthsMs.Select(r => Math.Max(0, p.PulseMs - r)).ToArray()).ToArray();
+        // from a gear engaged the other way the play of operator i is its whole width. A width the longest pulse did not get
+        // past moves nothing in the points and would only stand in for a lower rate (a probe at half the calibrated rate
+        // measured a 1.1 s play as 1.6 s with it): the fit takes the widths up to FitWidthMs and the wider ones the return
+        // got past
+        double longest = usable[^1].PulseMs;
+        int n = BaseWidthsMs.Count(r => r <= FitWidthMs || r < longest);
+        var a = usable.Select(p => BaseWidthsMs.Take(n).Select(r => Math.Max(0, p.PulseMs - r)).ToArray()).ToArray();
         var y = usable.Select(p => p.MovedPx / yRatePxPerMs).ToArray();
-        if (FitOnSimplex(a, y, n) is not { } w)
+        if (FitOnSimplex(a, y, n) is not { } fitted)
         {
             return false;
         }
 
-        double size = Enumerable.Range(0, n).Sum(i => w[i] * BaseWidthsMs[i]);
+        var w = Padded(fitted);
+
+        double size = Enumerable.Range(0, w.Length).Sum(i => w[i] * BaseWidthsMs[i]);
         PriorFullReversalMs = Math.Max(1, size);
         Build(size > 1 ? w : null);
         Array.Copy(logPrior, logPosterior, logPrior.Length);
@@ -795,7 +806,15 @@ public sealed class PlayModelBacklash : IBacklashCompensation
     private static GuideDirection Opposite(GuideDirection d) => d == GuideDirection.North ? GuideDirection.South : GuideDirection.North;
 
     private static bool ValidWeights(double[]? w, bool allowNull) =>
-        w is null ? allowNull : w.Length == BaseWidthsMs.Count && w.All(v => v >= 0 && double.IsFinite(v)) && w.Sum() > 0.5;
+        w is null ? allowNull : w.Length >= StoredWeightsBefore6000Ms && w.Length <= BaseWidthsMs.Count && w.All(v => v >= 0 && double.IsFinite(v)) && w.Sum() > 0.5;
+
+    // states stored before the 6000 and 8000 ms widths have weights for the first ten
+    private const int StoredWeightsBefore6000Ms = 10;
+
+    // the widest operator a calibration's or a probe's fit always uses (the widest one before 6000 and 8000 ms were added)
+    private const double FitWidthMs = 4000;
+
+    private static double[] Padded(double[] w) => w.Length == BaseWidthsMs.Count ? w : [.. w, .. new double[BaseWidthsMs.Count - w.Length]];
 
     private static double[] Normalised(double[] w)
     {
@@ -893,7 +912,7 @@ public sealed class PlayModelBacklash : IBacklashCompensation
             play = new double[widths.Length];
         }
 
-        public static Hypothesis NoPlay() => new("None", [1, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0);
+        public static Hypothesis NoPlay() => new("None", [1, .. new double[BaseWidthsMs.Count - 1]], 0);
 
         public string Shape { get; }
 
