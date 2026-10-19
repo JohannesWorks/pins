@@ -114,6 +114,14 @@ public sealed class PlayModelBacklash : IBacklashCompensation
     /// <summary>Below this much play left (ms) in its direction a pulse is not gated: the gear is engaged that way.</summary>
     public const double GateMinSlackMs = 60;
 
+    /// <summary>
+    /// Weight of a window opened at a reversal where the model expected no play (a full window weighs 1). Such a window is
+    /// there to notice a play that appears; at full weight, the windows of a mount without play, whose seeing cannot tell
+    /// no play from about 100 ms, kept the mean play around <see cref="GateMinSlackMs"/>, the gate held back about every
+    /// other pulse, and the Dec RMS was 7 % worse than without compensation (docs/notes/PLAY-MODEL-BACKLASH.md).
+    /// </summary>
+    public const double ProbeWindowWeight = 0.1;
+
     /// <summary>Largest compensation added to one pulse (ms); the rest is taken up by the next pulses.</summary>
     public const int MaxCompensationMs = 8000;
 
@@ -469,11 +477,16 @@ public sealed class PlayModelBacklash : IBacklashCompensation
         }
 
         // a pulse that takes up play opens a window: what the star does next tells how much play there was. Every reversal
-        // does, also when the model expects no play there: else a model sure of no play never measures a play that appears
-        if (window is null && double.IsFinite(lastRawOffset) && double.IsFinite(yRatePxPerMs)
-            && (reversal || Mean(Posterior(), h => h.Slack(direction)) >= GateMinSlackMs))
+        // does, also when the model expects no play there: else a model sure of no play never measures a play that appears.
+        // Such a window weighs ProbeWindowWeight
+        if (window is null && double.IsFinite(lastRawOffset) && double.IsFinite(yRatePxPerMs))
         {
-            window = new Window(direction, lastRawOffset, hypotheses.Select(h => h.Snapshot()).ToArray());
+            bool expectsPlay = Mean(Posterior(), h => h.Slack(direction)) >= GateMinSlackMs;
+            if (expectsPlay || reversal)
+            {
+                var start = hypotheses.Select(h => h.Snapshot()).ToArray();
+                window = new Window(direction, lastRawOffset, start, expectsPlay ? 1 : ProbeWindowWeight);
+            }
         }
 
         window?.Pulses.Add((sign, durationMs));
@@ -662,6 +675,9 @@ public sealed class PlayModelBacklash : IBacklashCompensation
             return;
         }
 
+        // a window of weight w counts as that share of a window: its likelihood tempered by w, the older evidence forgotten by
+        // Forgetting^w
+        double forgetting = Math.Pow(Forgetting, w.Weight);
         for (int k = 0; k < hypotheses.Length; k++)
         {
             var state = (double[])w.Start[k].Clone();
@@ -681,11 +697,11 @@ public sealed class PlayModelBacklash : IBacklashCompensation
             }
 
             double logLikelihood = -0.5 * MahalanobisSquared(covariance, residuals, n);
-            logPosterior[k] = logPrior[k] + Forgetting * (logPosterior[k] - logPrior[k]) + logLikelihood;
+            logPosterior[k] = logPrior[k] + forgetting * (logPosterior[k] - logPrior[k]) + w.Weight * logLikelihood;
         }
 
         ExcludeAboveLimit();
-        LearnedWindows = Forgetting * LearnedWindows + 1;
+        LearnedWindows = forgetting * LearnedWindows + w.Weight;
         LearnCount++;
         double max = logPosterior.Max();
         for (int k = 0; k < logPosterior.Length; k++)
@@ -954,9 +970,12 @@ public sealed class PlayModelBacklash : IBacklashCompensation
         }
     }
 
-    private sealed class Window(GuideDirection direction, double startOffset, double[][] start)
+    private sealed class Window(GuideDirection direction, double startOffset, double[][] start, double weight)
     {
         public GuideDirection Direction { get; } = direction;
+
+        /// <summary>How much the window counts: 1, or <see cref="ProbeWindowWeight"/>.</summary>
+        public double Weight { get; } = weight;
 
         public double StartOffset { get; } = startOffset;
 

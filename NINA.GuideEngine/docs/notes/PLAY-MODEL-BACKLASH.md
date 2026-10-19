@@ -280,3 +280,36 @@ biased. Fitted to the A/B over a grid of hard, medium and soft plays, the closes
 There the play model without a calibration's seed guided 15 % better than seeded (0.134 against 0.157 px measured): the
 seed's shape mixes the two grid widths around the play. Not changed on one night of one mount; the same holds for
 leaving the pulse model's Dec effect neutral under the play model (better RMS, longer settling in the scenario).
+
+## 9. Reversals where no play is expected (2026-10-19)
+
+Since every reversal opens a take-up window (§7), a mount without play guided 7 % worse with the play model than without
+(`PlayModelBacklashLoopTests.AMountWithoutBacklashLosesNothing`, 0.157 against 0.147 px; it allows 5 %). The
+compensation was not the cost, 3–11 pulses an hour carried any: the gate was. At 0.17 px of seeing and 0.0031 px/ms a
+window cannot tell no play from about 100 ms, so about 500–700 windows an hour kept the posterior's mean play swinging
+around `GateMinSlackMs` (60–130 ms, the most probable hypothesis still no play), and the gate held back 1300–1400 pulses
+an hour that a gear without play would have carried out. Before, the model learned about 5 windows, settled at 10–40 ms
+and stopped opening windows, and the gate held only during those first minutes (about 230 pulses).
+
+Such a window, opened at a reversal while the mean play that way is below `GateMinSlackMs`, now weighs
+`ProbeWindowWeight` = 0.1 of a window: its likelihood is tempered by 0.1 and the older evidence forgotten by
+`Forgetting`^0.1. A play that appears still shows in many of them (`APlayThatAppearsAfterNoPlayWasLearnedIsLearned`);
+the seeing of a mount without play hardly moves the model. In the test case 0.25 gave 0.156 px, 0.1 gave 0.151 and 0.05
+gave 0.150. Tried and dropped: learning such a window only when its best hypothesis beats the posterior by 3 σ (0.162 px:
+the windows that pass are the seeing's outliers, which teach a play), leaving out windows that start or run through an
+offset of more than 12 σ (0.156 px, and it lost the appearing play in the noiseless unit test), and gating by the
+median play instead of the mean (0.190 px: the gate's holds are what keeps the reversals of the seeing out).
+
+In `PrintComparison` only the cases without play changed (play model, RMS / reversals an hour):
+
+| Algorithm | Scenario | off | before | now |
+|---|---|---|---|---|
+| Predictive | no backlash + dither | 0.139 / 1289 | 0.151 / 536 | 0.144 / 990 |
+| Predictive | logged wander, no backlash | 0.177 / 1354 | 0.182 / 1281 | 0.179 / 1286 |
+| Hysteresis | no backlash + dither | 0.180 / 1416 | 0.198 / 1341 | 0.183 / 1364 |
+| Hysteresis | logged wander, no backlash | 0.184 / 937 | 0.189 / 931 | 0.185 / 938 |
+| ResistSwitch | no backlash + dither | 0.219 / 1284 | 0.228 / 1270 | 0.222 / 1278 |
+| ResistSwitch | logged wander, no backlash | 0.189 / 698 | 0.194 / 698 | 0.191 / 699 |
+
+Every case with a play is unchanged to the third digit; Hysteresis on "OnStepX varying + dither" has the same RMS at 76
+reversals an hour instead of 47.
