@@ -331,16 +331,17 @@ public sealed class GuidingCoach
             ];
         }
 
+        if (reason is not null)
+        {
+            // the play model would fit, but PHD2's algorithms don't learn what a pulse really did; noted above the fixed
+            // pulse's range too, where the play model is the only compensation left
+            parameters["playReason"] = reason;
+            parameters["playModelNeedsPredictive"] = true;
+        }
+
         if (backlashMs > 3000)
         {
             return [];
-        }
-
-        if (reason is not null)
-        {
-            // the play model would fit, but PHD2's algorithms don't learn what a pulse really did
-            parameters["playReason"] = reason;
-            parameters["playModelNeedsPredictive"] = true;
         }
 
         return

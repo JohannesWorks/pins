@@ -60,6 +60,12 @@ public sealed class InternalGuider : BaseINPC, IAdvancedGuider, IGuidingCoach, I
     /// <summary>How long a disconnect waits for a cancelled dark library build: the guide camera aborts its exposure.</summary>
     private static readonly TimeSpan DarkBuildStopTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// The play model learns at nearly every Dec reversal: stored at most this often (and when the guider changes state or
+    /// disconnects), not per learned window, to spare the Pi's SD card and the NINA log.
+    /// </summary>
+    internal static readonly TimeSpan PlayModelSaveInterval = TimeSpan.FromMinutes(1);
+
     /// <summary>Added to the exposures of the auto-select attempts: download and processing of each frame on a slow Pi.</summary>
     private static readonly TimeSpan AutoSelectTimeoutMargin = TimeSpan.FromSeconds(20);
 
@@ -134,6 +140,12 @@ public sealed class InternalGuider : BaseINPC, IAdvancedGuider, IGuidingCoach, I
     private readonly object darkGate = new();
     private CancellationTokenSource? darkBuildCts;
     private Task darkBuildDone = Task.CompletedTask;
+
+    // the latest learned play model not yet stored (keyed when learned: the profile may change before it is stored), and
+    // when the engine last had one stored (engine time; MinValue: the next one is stored at once)
+    private readonly object playModelGate = new();
+    private (PulseModelKey Key, BacklashPlayModelLearnedEvent Learned)? pendingPlayModel;
+    private DateTimeOffset playModelStoredAt = DateTimeOffset.MinValue;
 
     // the pulse output of the connected session: the PulseOutput setting only applies at the next connect
     private bool sessionUsesCameraSt4;
@@ -470,6 +482,13 @@ public sealed class InternalGuider : BaseINPC, IAdvancedGuider, IGuidingCoach, I
             // an incident still open is saved as stopped (its save event comes from the store)
             g.SetIncidentStore(null);
             g.EventRaised -= OnEngineEvent;
+        }
+
+        // no more engine events: the last learned play model is stored, and the next session stores its first at once
+        lock (playModelGate)
+        {
+            StorePendingPlayModel(DateTimeOffset.MinValue);
+            playModelStoredAt = DateTimeOffset.MinValue;
         }
 
         CloseGuideLog();
@@ -1494,6 +1513,8 @@ public sealed class InternalGuider : BaseINPC, IAdvancedGuider, IGuidingCoach, I
                         calibrationProgress = 0;
                     }
 
+                    // guiding stopped, paused or lost its star: what the play model learned so far is kept
+                    StorePendingPlayModel(st.Timestamp);
                     RaisePropertyChanged(nameof(State));
                     Raise(AdvancedGuiderEventTypes.State, e.Timestamp, GetStatus());
                     break;
@@ -1555,12 +1576,7 @@ public sealed class InternalGuider : BaseINPC, IAdvancedGuider, IGuidingCoach, I
                     Logger.Info($"InternalGuider: {dp.Message}");
                     break;
                 case BacklashPlayModelLearnedEvent bp:
-                    PersistPlayModel(bp.State);
-                    if (bp.InUse)
-                    {
-                        Logger.Info($"InternalGuider: {GuideLogBridge.PlayModelText(bp.Values)}");
-                    }
-
+                    QueuePlayModel(bp);
                     break;
                 case SettleBeginEvent:
                     settleStatus = "Settling";
@@ -2186,12 +2202,51 @@ public sealed class InternalGuider : BaseINPC, IAdvancedGuider, IGuidingCoach, I
         }
     }
 
-    private void PersistPlayModel(PlayModelState state)
+    // stores the learned play model unless one was stored within PlayModelSaveInterval; otherwise it waits for the next
+    private void QueuePlayModel(BacklashPlayModelLearnedEvent learned)
+    {
+        bool due;
+        lock (playModelGate)
+        {
+            pendingPlayModel = (PulseModelKeyNow(), learned);
+            due = playModelStoredAt == DateTimeOffset.MinValue || learned.Timestamp - playModelStoredAt >= PlayModelSaveInterval;
+        }
+
+        if (due)
+        {
+            StorePendingPlayModel(learned.Timestamp);
+        }
+    }
+
+    // now: the engine time recorded as the last store when one is pending
+    private void StorePendingPlayModel(DateTimeOffset now)
+    {
+        // under the gate: a disconnect's store and the guide loop's last one don't race for the file
+        lock (playModelGate)
+        {
+            if (pendingPlayModel is not { } pending)
+            {
+                return;
+            }
+
+            pendingPlayModel = null;
+            playModelStoredAt = now;
+            PersistPlayModel(pending.Key, pending.Learned.State);
+
+            // the guide log has every update (GuideLogBridge); the NINA log only the stored ones
+            if (pending.Learned.InUse)
+            {
+                Logger.Info($"InternalGuider: {GuideLogBridge.PlayModelText(pending.Learned.Values)}");
+            }
+        }
+    }
+
+    private void PersistPlayModel(PulseModelKey key, PlayModelState state)
     {
         try
         {
             var store = LoadPlayModelStore();
-            store.Set(PulseModelKeyNow(), state);
+            store.Set(key, state);
             Directory.CreateDirectory(Path.GetDirectoryName(playModelStorePath)!);
             var tmp = playModelStorePath + ".tmp";
             File.WriteAllText(tmp, store.ToJson());

@@ -126,8 +126,14 @@ public class CoachSettingsAndHintsTests
         p["playModelNeedsPredictive"].Should().Be(true);
         CoachFindings.MessageFor(CoachCodes.ResponseDecBacklash, p).Should().EndWith("needs the Predictive Dec algorithm.");
 
-        // above the fixed pulse's range nothing is suggested: switching the algorithm is not the coach's call here
-        GuidingCoach.BacklashSuggestion(4000, 4200, fits: true, GuideAlgorithmKind.ResistSwitch, new Dictionary<string, object?>()).Should().BeEmpty();
+        // above the fixed pulse's range nothing is suggested: switching the algorithm is not the coach's call here, but
+        // the note says that the play model would fit
+        var large = new Dictionary<string, object?> { ["ms"] = 4000.0, ["arcsec"] = 12.0, ["largeMoveMs"] = 4200.0 };
+        GuidingCoach.BacklashSuggestion(4000, 4200, fits: true, GuideAlgorithmKind.ResistSwitch, large).Should().BeEmpty();
+        large.Should().NotContainKey("playModel");
+        large["playReason"].Should().Be("large");
+        large["playModelNeedsPredictive"].Should().Be(true);
+        CoachFindings.MessageFor(CoachCodes.ResponseDecBacklash, large).Should().EndWith("needs the Predictive Dec algorithm.");
     }
 
     [TestCase(500, 520.0, TestName = "Hard play")]
