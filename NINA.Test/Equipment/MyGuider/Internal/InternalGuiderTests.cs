@@ -211,12 +211,26 @@ public class InternalGuiderOptionsTests
         o.IsSimulator.Should().BeFalse();
         o.GetDouble("ExposureSeconds").Should().Be(2);
         var s = o.ToEngineSettings();
-        s.RaAlgorithm.Kind.Should().Be(GuideAlgorithmKind.Hysteresis);
-        s.DecAlgorithm.Kind.Should().Be(GuideAlgorithmKind.ResistSwitch);
+        s.RaAlgorithm.Kind.Should().Be(GuideAlgorithmKind.Predictive);
+        s.DecAlgorithm.Kind.Should().Be(GuideAlgorithmKind.Predictive);
         s.AutoCalibrationStep.Should().BeTrue();
         s.MaxRaDurationMs.Should().Be(2500);
         s.MinPulseMs.Should().Be(20);
         s.Gain.Should().BeNull();
+    }
+
+    [Test]
+    public void Phd2s_default_algorithms_are_not_carried_over()
+    {
+        // every profile has them unless they were changed
+        var (o, g) = Create();
+        var phd2 = new NINA.Profile.GuiderSettings();
+        g.SetupGet(x => x.PHD2GuideAlgorithmRA).Returns(phd2.PHD2GuideAlgorithmRA);
+        g.SetupGet(x => x.PHD2GuideAlgorithmDec).Returns(phd2.PHD2GuideAlgorithmDec);
+
+        var s = o.ToEngineSettings();
+        s.RaAlgorithm.Kind.Should().Be(GuideAlgorithmKind.Predictive);
+        s.DecAlgorithm.Kind.Should().Be(GuideAlgorithmKind.Predictive);
     }
 
     [Test]

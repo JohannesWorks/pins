@@ -144,6 +144,8 @@ Capture → dark subtraction **or** defect-map correction → optional noise red
 
 ### Guide algorithms
 Pluggable `IGuideAlgorithm` (so PPEC/GP and dark guiding can land in v2).
+* The internal guider defaults to [Predictive](docs/ALGORITHMS.md#predictive) on both axes; the engine's own
+  `GuiderSettings` keeps the PHD2 defaults below.
 * RA default Hysteresis (aggression 0.7, hysteresis 0.1), alternative Lowpass2 (aggressiveness 80 %).
 * Dec default ResistSwitch (aggression 1.0, fast switch on), alternatives Hysteresis/Lowpass2.
 * Min-move default `max(0.1515 + 0.1548/scale, 0.15)` px.

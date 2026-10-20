@@ -124,8 +124,8 @@ internal sealed class InternalGuiderOptions
         new("SaturationAdu", "Saturation ADU", "Stars", "int", "0", Min: 0, Max: 65535, Description: "0 = detect saturation from the star profile."),
 
         // Algorithms
-        new("RaAlgorithm", "RA algorithm", "Algorithms", "enum", "Hysteresis", Basic: true, Options: RaAlgorithms, Description: AlgorithmDescription,
-            Phd2Fallback: s => AlgorithmName(s.PHD2GuideAlgorithmRA, RaAlgorithms)),
+        new("RaAlgorithm", "RA algorithm", "Algorithms", "enum", "Predictive", Basic: true, Options: RaAlgorithms, Description: AlgorithmDescription,
+            Phd2Fallback: s => AlgorithmName(s.PHD2GuideAlgorithmRA, RaAlgorithms, phd2Default: "Hysteresis")),
         new("RaAggression", "RA aggression", "Algorithms", "double", "0.7", Basic: true, Min: 0, Max: 1, Description: "Share of the error corrected per frame (0..1).",
             Phd2Fallback: s => s.PHD2RAAggressiveness?.ToString(Inv), DependsOn: "RaAlgorithm", AppliesTo: RaAggressionAlgorithms),
         new("RaHysteresis", "RA hysteresis", "Algorithms", "double", "0.1", Min: 0, Max: 0.5, Phd2Fallback: s => s.PHD2RAHysteresis?.ToString(Inv),
@@ -142,8 +142,8 @@ internal sealed class InternalGuiderOptions
             Description: "Teeth of the RA worm wheel (e.g. 180 on an EQ6-R, 135 on an HEQ5); gives the exact worm period. 0 = detect the period from the guide frames."),
         new("ForgetPeriodicError", "Forget periodic error", "Algorithms", "action", "", DependsOn: "RaAlgorithm", AppliesTo: PredictiveAlgorithms,
             Description: "Forgets the periodic error learned for this mount, e.g. after the worm was adjusted; it is then learned anew."),
-        new("DecAlgorithm", "Dec algorithm", "Algorithms", "enum", "ResistSwitch", Basic: true, Options: DecAlgorithms, Description: AlgorithmDescription,
-            Phd2Fallback: s => AlgorithmName(s.PHD2GuideAlgorithmDec, DecAlgorithms)),
+        new("DecAlgorithm", "Dec algorithm", "Algorithms", "enum", "Predictive", Basic: true, Options: DecAlgorithms, Description: AlgorithmDescription,
+            Phd2Fallback: s => AlgorithmName(s.PHD2GuideAlgorithmDec, DecAlgorithms, phd2Default: "ResistSwitch")),
         new("DecAggression", "Dec aggression", "Algorithms", "double", "1.0", Basic: true, Min: 0, Max: 1, Phd2Fallback: s => s.PHD2DecAggressiveness?.ToString(Inv),
             DependsOn: "DecAlgorithm", AppliesTo: DecAggressionAlgorithms),
         new("DecHysteresis", "Dec hysteresis", "Algorithms", "double", "0.1", Min: 0, Max: 0.5, Phd2Fallback: s => s.PHD2DecHysteresis?.ToString(Inv),
@@ -569,7 +569,9 @@ internal sealed class InternalGuiderOptions
 
     private static string? Bool(bool? b) => b is null ? null : b.Value ? "true" : "false";
 
-    private static string? AlgorithmName(string? phd2Name, string[] allowed)
+    // every profile has PHD2's default algorithm unless it was changed, so it is no choice to carry over: the internal
+    // guider's own default applies
+    private static string? AlgorithmName(string? phd2Name, string[] allowed, string phd2Default)
     {
         if (string.IsNullOrWhiteSpace(phd2Name))
         {
@@ -577,6 +579,11 @@ internal sealed class InternalGuiderOptions
         }
 
         var n = phd2Name.Replace(" ", string.Empty).Replace("-", string.Empty);
+        if (string.Equals(n, phd2Default, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
         return allowed.FirstOrDefault(a => string.Equals(a, n, StringComparison.OrdinalIgnoreCase));
     }
 }
