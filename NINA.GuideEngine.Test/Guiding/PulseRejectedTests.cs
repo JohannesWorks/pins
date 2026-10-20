@@ -23,7 +23,7 @@ public class PulseRejectedTests
     {
         var clock = new VirtualClock();
         var sim = new Simulator(SimulatorScenario.GoodMount, clock);
-        var output = new RejectingDecOutput(sim.Mount, clock);
+        var output = new RejectingOutput(sim.Mount, clock);
         var settings = new GuiderSettings { FocalLengthMm = SimulatorScenario.GoodMount.Camera.FocalLengthMm, ExposureMs = 2000 };
         var guider = new Guider(sim.Camera, output, sim.Mount, clock, settings, ditherSeed: 5) { AutoStartLoop = false };
         output.Active = () => guider.State == GuiderState.Guiding;
@@ -58,12 +58,35 @@ public class PulseRejectedTests
         output.LastRejectedAt.Should().BeGreaterThan(duration - TimeSpan.FromMinutes(1), "guiding went on to the end");
     }
 
-    /// <summary>While <see cref="Active"/>, every Dec pulse is rejected without moving the mount.</summary>
-    private sealed class RejectingDecOutput(SimulatedMount inner, VirtualClock clock) : IPulseOutput
+    [Test]
+    public async Task A_rejected_RA_pulse_does_not_keep_the_Dec_pulse_of_the_frame_from_being_sent()
+    {
+        var clock = new VirtualClock();
+        var sim = new Simulator(SimulatorScenario.GoodMount, clock);
+        var output = new RejectingOutput(sim.Mount, clock, GuideAxis.Ra);
+        var settings = new GuiderSettings { FocalLengthMm = SimulatorScenario.GoodMount.Camera.FocalLengthMm, ExposureMs = 2000 };
+        var guider = new Guider(sim.Camera, output, sim.Mount, clock, settings, ditherSeed: 5) { AutoStartLoop = false };
+        output.Active = () => guider.State == GuiderState.Guiding;
+
+        _ = guider.StartGuidingAsync(Settle);
+        var duration = TimeSpan.FromMinutes(6);
+        guider.StartLooping(clock.CancelAt(clock.Elapsed + duration));
+        await guider.WaitForLoopAsync().Within(duration);
+
+        // the RA pulse comes first in a frame: before, its rejection dropped the frame's Dec pulse too
+        output.Rejected.Should().BeGreaterThan(0);
+        output.SentAfterRejection.Should().BeGreaterThan(0, "the Dec pulse of a frame whose RA pulse was rejected went out");
+    }
+
+    /// <summary>While <see cref="Active"/>, every pulse on the axis is rejected without moving the mount.</summary>
+    private sealed class RejectingOutput(SimulatedMount inner, VirtualClock clock, GuideAxis axis = GuideAxis.Dec) : IPulseOutput
     {
         public Func<bool> Active { get; set; } = () => false;
 
         public int Rejected { get; private set; }
+
+        /// <summary>Pulses on the other axis sent right after a rejection, in the same frame.</summary>
+        public int SentAfterRejection { get; private set; }
 
         public TimeSpan LastRejectedAt { get; private set; }
 
@@ -75,11 +98,16 @@ public class PulseRejectedTests
 
         public Task PulseAsync(GuideDirection direction, int durationMs, CancellationToken ct)
         {
-            if (direction is GuideDirection.North or GuideDirection.South && Active())
+            if (direction.Axis() == axis && Active())
             {
                 Rejected++;
                 LastRejectedAt = clock.Elapsed;
                 throw new PulseRejectedException($"the driver rejected the {durationMs} ms pulse");
+            }
+
+            if (Rejected > 0 && LastRejectedAt == clock.Elapsed && direction.Axis() != axis)
+            {
+                SentAfterRejection++;
             }
 
             return inner.PulseAsync(direction, durationMs, ct);

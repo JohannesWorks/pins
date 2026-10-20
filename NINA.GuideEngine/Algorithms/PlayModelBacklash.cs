@@ -400,7 +400,10 @@ public sealed class PlayModelBacklash : IBacklashCompensation
 
     public bool HoldMove(MoveOptions options, double yGuideDistance, double yRate, DateTimeOffset now = default)
     {
-        if (!IsEnabled || !GateEnabled || !stateKnown || (options & MoveOptions.AlgoResult) == 0 || yGuideDistance == 0.0 || !double.IsFinite(yGuideDistance))
+        // also while the gear's position is unknown (after a stop, a Dec guide mode change or a pulse not sent): the play is
+        // then assumed centred, and the first pulse either way would get half of it on a noise offset (947 ms for 0.15 px on
+        // the OnStepX of 2026-10-18)
+        if (!IsEnabled || !GateEnabled || (options & MoveOptions.AlgoResult) == 0 || yGuideDistance == 0.0 || !double.IsFinite(yGuideDistance))
         {
             return false;
         }
@@ -445,7 +448,18 @@ public sealed class PlayModelBacklash : IBacklashCompensation
         return added;
     }
 
+    /// <summary>
+    /// What the pulse moves the star by, as told to the guide algorithm (<see cref="AxisCorrector"/>). While the
+    /// compensation is off this is the pulse as sent, as with the fixed compensation switched off: the model still tracks
+    /// the gear (<see cref="ExpectedMs"/>), but does not change the guiding.
+    /// </summary>
     public double EffectiveMs(GuideDirection direction, int durationMs, int compensationMs)
+    {
+        return IsEnabled ? ExpectedMs(direction, durationMs, compensationMs) : Math.Max(0, durationMs - compensationMs);
+    }
+
+    // what the model expects the pulse to move the star by, also while the compensation is off
+    private double ExpectedMs(GuideDirection direction, int durationMs, int compensationMs)
     {
         if (durationMs <= 0)
         {
@@ -471,7 +485,7 @@ public sealed class PlayModelBacklash : IBacklashCompensation
         int sign = direction == GuideDirection.South ? 1 : -1;
         if (double.IsFinite(yRatePxPerMs))
         {
-            expectedCorrectionPx += sign * EffectiveMs(direction, durationMs, LastCompensationMs) * yRatePxPerMs;
+            expectedCorrectionPx += sign * ExpectedMs(direction, durationMs, LastCompensationMs) * yRatePxPerMs;
         }
 
         bool reversal = lastDirection is { } last && last != direction;

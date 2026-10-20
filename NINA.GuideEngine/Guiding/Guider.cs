@@ -905,22 +905,33 @@ public sealed partial class Guider : IAsyncDisposable
 
             framePulses = pulses;
             cycleTimer.PulsesStarting(clock.UtcNow);
-            bool sent = await IssuePulsesAsync(pulses, ct).ConfigureAwait(false);
+            var sent = await IssuePulsesAsync(pulses, ct).ConfigureAwait(false);
             cycleTimer.PulsesDone(clock.UtcNow);
-            if (sent && pendingCorrection is { } applied)
+
+            // per axis: a rejected RA pulse leaves the Dec pulse sent, its correction applied and the Dec gear tracked
+            bool raSent = sent.Any(p => p.Direction.Axis() == GuideAxis.Ra);
+            bool decSent = sent.Any(p => p.Direction.Axis() == GuideAxis.Dec);
+            if (pendingCorrection is { } applied && sent.Count > 0)
             {
-                corrector.CorrectionsApplied(applied.RaPx, applied.DecPx);
-                decDrift.CorrectionApplied(applied.DecPx);
+                corrector.CorrectionsApplied(raSent ? applied.RaPx : 0, decSent ? applied.DecPx : 0);
+                if (decSent)
+                {
+                    decDrift.CorrectionApplied(applied.DecPx);
+                }
             }
 
-            if (sent)
+            if (sent.Count == pulses.Count)
             {
                 PulseModelPulsesSent(pulses);
             }
             else
             {
-                pulseModel.Interrupt(mountMoved: false);
-                PlayModelPulsesNotSent();
+                // a Dec pulse the pulse model does not see moved the gear: its last Dec direction is no longer known
+                pulseModel.Interrupt(mountMoved: decSent);
+                if (pulses.Any(p => p.Direction.Axis() == GuideAxis.Dec && !sent.Contains(p)))
+                {
+                    PlayModelPulsesNotSent();
+                }
             }
         }
     }
@@ -1931,45 +1942,81 @@ public sealed partial class Guider : IAsyncDisposable
         _ => GuideErrorCode.MountDisconnected,
     };
 
-    /// <summary>Sends the pulses; false when the guide output failed.</summary>
-    private async Task<bool> IssuePulsesAsync(IReadOnlyList<PulseCommand> pulses, CancellationToken ct)
+    /// <summary>
+    /// Sends the pulses and returns those the mount carried out: a pulse the mount rejected is left out and the other axis
+    /// still gets its pulse; after a failed guide output no further pulse is sent.
+    /// </summary>
+    private async Task<IReadOnlyList<PulseCommand>> IssuePulsesAsync(IReadOnlyList<PulseCommand> pulses, CancellationToken ct)
     {
-        try
+        var errors = new Exception?[pulses.Count];
+        if (settings.SimultaneousPulses && output.SupportsSimultaneousPulses && pulses.Count > 1)
         {
-            if (settings.SimultaneousPulses && output.SupportsSimultaneousPulses && pulses.Count > 1)
+            errors = await Task.WhenAll(pulses.Select(p => TryPulseAsync(p, ct))).ConfigureAwait(false);
+        }
+        else
+        {
+            for (int i = 0; i < pulses.Count; i++)
             {
-                await Task.WhenAll(pulses.Select(p => output.PulseAsync(p.Direction, p.DurationMs, ct))).ConfigureAwait(false);
+                errors[i] = await TryPulseAsync(pulses[i], ct).ConfigureAwait(false);
+                if (errors[i] is { } error && error is not PulseRejectedException)
+                {
+                    // the output failed: the pulses after it are not sent either
+                    errors.AsSpan(i + 1).Fill(error);
+                    break;
+                }
+            }
+        }
+
+        var sent = new List<PulseCommand>(pulses.Count);
+        Exception? failure = null;
+        for (int i = 0; i < pulses.Count; i++)
+        {
+            if (errors[i] is null)
+            {
+                sent.Add(pulses[i]);
+            }
+            else if (errors[i] is PulseRejectedException rejected)
+            {
+                // the output works, the mount did not move: not a step towards giving up on the output
+                PulseRejected(rejected.Message);
             }
             else
             {
-                foreach (var p in pulses)
-                {
-                    await output.PulseAsync(p.Direction, p.DurationMs, ct).ConfigureAwait(false);
-                }
+                failure ??= errors[i];
             }
+        }
 
+        if (failure is not null)
+        {
+            Alert(GuideErrorCode.PulseOutputFailed, failure.Message);
+            if (++pulseFailures >= settings.MaxPulseFailures)
+            {
+                Fail(GuideErrorCode.MountDisconnected, failure.Message);
+            }
+        }
+        else if (sent.Count > 0)
+        {
             pulseFailures = 0;
-            return true;
+        }
+
+        return sent;
+    }
+
+    // one pulse; the error when it was not carried out
+    private async Task<Exception?> TryPulseAsync(PulseCommand pulse, CancellationToken ct)
+    {
+        try
+        {
+            await output.PulseAsync(pulse.Direction, pulse.DurationMs, ct).ConfigureAwait(false);
+            return null;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
         }
-        catch (PulseRejectedException ex)
-        {
-            // the output works, the mount did not move: not a step towards giving up on the output
-            PulseRejected(ex.Message);
-            return false;
-        }
         catch (Exception ex)
         {
-            Alert(GuideErrorCode.PulseOutputFailed, ex.Message);
-            if (++pulseFailures >= settings.MaxPulseFailures)
-            {
-                Fail(GuideErrorCode.MountDisconnected, ex.Message);
-            }
-
-            return false;
+            return ex;
         }
     }
 

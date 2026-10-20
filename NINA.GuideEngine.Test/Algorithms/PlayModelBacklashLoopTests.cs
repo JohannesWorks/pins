@@ -250,6 +250,31 @@ public class PlayModelBacklashLoopTests
         }
     }
 
+    [Test]
+    [Explicit("prints the dithered scenarios with the dither guided out and with Guider's fast recenter")]
+    public void PrintFastRecenter()
+    {
+        foreach (var (name, scenario) in Scenarios.Where(s => Dithers(s.Loop)))
+        {
+            foreach (var mode in new[] { "off", "fixed", "play" })
+            {
+                foreach (bool recenter in new[] { false, true })
+                {
+                    var a = Average(seed =>
+                    {
+                        var loop = scenario(seed);
+                        loop.FastRecenter = recenter;
+                        return loop;
+                    }, mode, seeds: 5);
+                    TestContext.Out.WriteLine(
+                        $"| {name} | {mode} | {(recenter ? "recenter" : "guided")} | {a.Rms:F3} | {a.Guiding:F3} | {a.Settle:F1} | {a.Reversals:F0} | {a.PulseSec:F0} |");
+                }
+            }
+        }
+
+        static bool Dithers(Func<int, DecPlayLoop> loop) => loop(1).DitherEveryFrames > 0;
+    }
+
     /// <summary>
     /// The OnStepX of 2026-10-18 after the meridian flip, fitted to an A/B of the same session (21:31–22:20, Predictive, pulse
     /// model still neutral, dithers of up to 3.5 px every 3.5 minutes, 1.02 s frames, Dec rate 3.29 px/s): with the play

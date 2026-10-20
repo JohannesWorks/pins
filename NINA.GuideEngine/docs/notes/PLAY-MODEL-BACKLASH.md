@@ -360,3 +360,38 @@ rate measured a 1.1 s play as 1.6 s (`DecPlayProbeTests.MeasuresThePlayThroughSe
 widths up to 4000 ms, as before, and the wider ones only when the return got past them. States stored with ten weights
 are restored with zeros for the new widths. Tests: `PlayModelBacklashTests.AReturnThroughAPlayWiderThanFourSecondsMeasuresItsSize`,
 `AStateStoredWithTheFirstTenWidthsIsRestored`.
+
+## 12. Review of PR 208 (2026-10-20)
+
+- **The dither in the simulation.** `DecPlayLoop` guided a dither out with guide steps; `Guider` by default
+  (`FastRecenter`) tells the algorithms of the dither and moves it back with an open-loop recovery move, which the gate
+  does not hold and which drops an open take-up window. `DecPlayLoop.FastRecenter` does that now
+  (`PlayModelBacklashLoopTests.PrintFastRecenter`, Predictive, 5 seeds; RMS / guiding / settle frames / reversals an hour,
+  guided out → recentered):
+
+  | Scenario | off | play model, guided out | play model, recentered |
+  |---|---|---|---|
+  | OnStepX + dither | 0.179 / 0.067 / 3.0 / 1274 | 0.155 / 0.069 / 2.6 / 30 | 0.153 / 0.070 / 1.9 / 31 |
+  | hard 600 + dither | 0.206 / 0.148 / 2.2 / 1084 | 0.174 / 0.112 / 2.2 / 74 | 0.172 / 0.111 / 1.5 / 74 |
+  | hard 2000, drift + dither | 0.261 / 0.185 / 4.0 / 909 | 0.178 / 0.107 / 1.8 / 80 | 0.178 / 0.108 / 1.6 / 83 |
+  | no backlash + dither | 0.139 / 0.050 / 1.1 / 1289 | 0.144 / 0.061 / 1.5 / 990 | 0.142 / 0.062 / 0.9 / 1050 |
+  | logged wander + dither | 0.252 / 0.189 / 3.4 / 663 | 0.199 / 0.148 / 1.7 / 398 | 0.199 / 0.148 / 2.0 / 399 |
+  | OnStepX 2026-10-18 | 0.347 / 0.173 / 5.1 / 622 | 0.270 / 0.098 / 1.5 / 176 | 0.255 / 0.084 / 1.4 / 152 |
+
+  Without compensation and with the fixed pulse the recenter changes the results by about their seed noise. The results
+  of §4, §7 and §9 hold for the default path: the play model settles as fast or faster after a recenter, and guides
+  the same between dithers.
+- **The gate while the gear's position is unknown.** After a stop, a Dec guide mode change or a Dec pulse not sent the
+  model assumes the gear in the middle of its play, and the first pulse either way got half of it without the gate, as
+  switching the compensation on did before (947 ms for a 0.15 px offset on the OnStepX of 2026-10-18). The gate now
+  holds such pulses as well. Giving no compensation while the gate has no noise estimate yet (its first five frames)
+  was tried and dropped: "hard 600 + dither" guided 3 % worse (0.121 against 0.117 px), and a stop without calibration
+  or probe afterwards is rare.
+- **Compensation off.** The model kept telling Predictive the motion it expected (`EffectiveMs`) while the compensation
+  was off, unlike the fixed compensation switched off. The algorithm is now told the pulse as sent; the model still
+  tracks the gear, so switching it on keeps the position. Where the "without compensation" side of an A/B (2026-10-18)
+  switched the play model off rather than choosing the fixed compensation, Predictive was told the expected motion
+  there too, and the simulation (`Corrector(null)`, the pulse as sent) did not compare the same thing.
+- **Pulses not sent per axis.** A pulse the mount rejected made the whole frame count as not sent: sent one after the
+  other, the Dec pulse after a rejected RA pulse was not sent at all, and the play model forgot the gear. Now only the
+  rejected axis counts as not sent (`PulseRejectedTests.A_rejected_RA_pulse_does_not_keep_the_Dec_pulse_of_the_frame_from_being_sent`).

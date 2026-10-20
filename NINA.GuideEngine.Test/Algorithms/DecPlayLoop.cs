@@ -49,6 +49,13 @@ internal sealed class DecPlayLoop
 
     public double DitherPx { get; init; } = 3;
 
+    /// <summary>
+    /// A dither is moved back as Guider does by default (<see cref="NINA.GuideEngine.Guiding.GuiderSettings.FastRecenter"/>):
+    /// the algorithms are told of it, and the next frame makes one open-loop recovery move of the dither, which the gate
+    /// does not hold and which drops an open take-up window. False: the dither is guided out with guide steps.
+    /// </summary>
+    public bool FastRecenter { get; set; }
+
     /// <summary>A dither has settled once the true offset stayed below this (px) for <see cref="SettleFrames"/> frames.</summary>
     public double SettlePx { get; init; } = 0.3;
 
@@ -120,6 +127,7 @@ internal sealed class DecPlayLoop
         double pulseMs = 0;
         GuideDirection? last = null;
         double lockOffset = 0;
+        double recenterPx = 0;
         double slow = 0;
         int sinceDither = -1, calm = 0, settledCount = 0;
         double settleSum = 0, guidingSum = 0, measuredGuidingSum = 0;
@@ -140,11 +148,19 @@ internal sealed class DecPlayLoop
             double slowBefore = slow;
             slow = SlowWanderPhi * slow + SlowWanderPx * Math.Sqrt(1 - SlowWanderPhi * SlowWanderPhi) * Gauss(rng);
             sky += slow - slowBefore;
+            var now = t0.AddSeconds(f * FrameSec);
             if (DitherEveryFrames > 0 && f > 0 && f % DitherEveryFrames == 0)
             {
+                double before = lockOffset;
                 lockOffset = DitherPx * (2 * rng.NextDouble() - 1);
                 sinceDither = 0;
                 calm = 0;
+                if (FastRecenter)
+                {
+                    // Guider.DitherCore: the lock moved by the mount delta, the offset it creates is its negative
+                    corrector.GuidingDithered(0, lockOffset - before, now);
+                    recenterPx = before - lockOffset;
+                }
             }
 
             double truth = sky - mount - lockOffset;
@@ -184,8 +200,21 @@ internal sealed class DecPlayLoop
                 measuredGuidingSum += measured * measured;
             }
 
-            var now = t0.AddSeconds(f * FrameSec);
-            var corr = corrector.GuideStep(0, measured, 1, YRatePxPerMs * CorrectorRateFactor, now);
+            GuideCorrection corr;
+            bool recenterMove = recenterPx != 0;
+            if (recenterMove)
+            {
+                // Guider with FastRecenter: one open-loop recovery move of the dither (it stays below 0.7 × the search
+                // region), past the algorithms and the gate, the Dec pulse clamped to the max pulse
+                corr = corrector.Move(0, recenterPx, 1, YRatePxPerMs * CorrectorRateFactor, MoveOptions.RecoveryMove, now)!;
+                corrector.DirectMoveApplied(0, recenterPx);
+                recenterPx = 0;
+            }
+            else
+            {
+                corr = corrector.GuideStep(0, measured, 1, YRatePxPerMs * CorrectorRateFactor, now);
+            }
+
             onStep?.Invoke(corrector, corr);
             if (corr.DecHeldByBacklash)
             {
@@ -193,8 +222,9 @@ internal sealed class DecPlayLoop
             }
 
             bool reported = false;
-            foreach (var p in corr.Pulses.Where(p => p.Direction.Axis() == GuideAxis.Dec))
+            foreach (var computed in corr.Pulses.Where(p => p.Direction.Axis() == GuideAxis.Dec))
             {
+                var p = recenterMove ? computed with { DurationMs = Math.Min(computed.DurationMs, corrector.Limiter.MaxDecDurationMs) } : computed;
                 pulseMs += p.DurationMs;
                 if (p.DurationMs >= corrector.Limiter.MaxDecDurationMs)
                 {

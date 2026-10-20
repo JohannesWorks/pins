@@ -132,13 +132,19 @@ public class PlayModelBacklashTests
     }
 
     [Test]
-    public void AnUnknownGearGetsHalfThePlayAndNoPulseIsHeld()
+    public void AnUnknownGearHoldsANoiseOffsetAndGetsHalfThePlayForARealOne()
     {
         var play = Learned(600);
         play.ResetState();
         play.Values.StateKnown.Should().BeFalse();
+
+        // the 947 ms for a 0.15 px offset of the OnStepX of 2026-10-18, here after a stop or a pulse not sent
+        play.TrackResults(MoveOptions.GuideStep, -0.1, 0, Rate);
+        play.HoldMove(MoveOptions.GuideStep, -0.1, Rate).Should().BeTrue();
+
+        play.TrackResults(MoveOptions.GuideStep, -1.5, 0, Rate);
+        play.HoldMove(MoveOptions.GuideStep, -0.9, Rate).Should().BeFalse();
         Compensation(play, GuideDirection.North, 100).Should().BeInRange(220, 320);
-        play.HoldMove(MoveOptions.GuideStep, -0.1, Rate).Should().BeFalse();
     }
 
     [Test]
@@ -155,6 +161,18 @@ public class PlayModelBacklashTests
         play.Values.StateKnown.Should().BeTrue();
         play.Values.Engaged.Should().Be(GuideDirection.North);
         Compensation(play, GuideDirection.North, 100).Should().Be(0, "the gear is engaged North, a North pulse needs no play");
+    }
+
+    [Test]
+    public void WhileOffTheAlgorithmIsToldThePulseAsSent()
+    {
+        var play = Learned(600);
+        play.GearEngaged(GuideDirection.South);
+        play.EffectiveMs(GuideDirection.North, 400, 0).Should().BeLessThan(100, "the reversal takes up the play");
+
+        // as with the fixed compensation switched off, not what the model expects
+        play.Enable(false);
+        play.EffectiveMs(GuideDirection.North, 400, 0).Should().Be(400);
     }
 
     [Test]
